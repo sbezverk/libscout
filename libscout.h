@@ -3,6 +3,7 @@
 #include "avl/avl_tree.h"
 #include <limits.h>
 #include <pthread.h>
+#include <stdbool.h>
 
 #define MAX_LIB_ENTRY 2
 

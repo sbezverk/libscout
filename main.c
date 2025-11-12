@@ -10,7 +10,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "elflib/elflib.h"
+#include "elflib.h"
 #include "libscout.h"
 
 int main(int argc, char *argv[]) {

@@ -3,11 +3,11 @@ package(default_visibility = ["//visibility:public"])
 cc_binary(
     name = "libscout",
     srcs = [
-        "elflib/elf_lib_funcs.c",
-        "elflib/elflib.h",
-        "include/libscout.h",
-        "src/libscout.c",
-        "src/main.c",
+        "elf_lib_funcs.c",
+        "elflib.h",
+        "libscout.c",
+        "libscout.h",
+        "main.c",
     ],
     copts = [
         "--std=c23",

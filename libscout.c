@@ -6,7 +6,7 @@
 #include <sys/types.h>
 
 #include "avl/avl_tree.h"
-#include "elflib/elflib.h"
+#include "elflib.h"
 #include "libscout.h"
 
 int sym_name_compare(struct avl2_node_type_ *n1, struct avl2_node_type_ *n2) {
