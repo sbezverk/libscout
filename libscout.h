@@ -3,6 +3,7 @@
 #include "avl/avl_tree.h"
 #include <limits.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 
 #define THREAD_RETURN(rc) return (void *)(long)rc
@@ -49,13 +50,12 @@ typedef struct mpsc_buffer_ {
   pthread_cond_t not_empty;
   pthread_cond_t not_full;
   int producer_count;
-  bool producer_done;
+  _Atomic bool producer_done;
 } mpsc_buffer_t;
 
 typedef struct producer_thread_ctx_ {
   void *user_data;
   mpsc_buffer_t *buffer;
-  pthread_t search_t;
 } producer_thread_ctx_t;
 
 typedef struct main_thread_ctx_ {
@@ -63,10 +63,10 @@ typedef struct main_thread_ctx_ {
   char *lib_path;
 } main_thread_ctx_t;
 
-typedef struct sym_thread_data_ {
+typedef struct thread_user_data_ {
   int fd;
   char *lib_path;
-} sym_thread_data_t;
+} thread_user_data_t;
 
 void *get_undefined_sym(void *arg);
 void *resolve_undefined_sym(void *arg);

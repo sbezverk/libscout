@@ -15,6 +15,10 @@ static bool buffer_is_full(mpsc_buffer_t *b) {
   return ((b->tail + 1) % MAX_LIB_ENTRY) == b->head;
 }
 
+static bool is_buffer_producer_done(mpsc_buffer_t *buffer) {
+  return atomic_load(&buffer->producer_done);
+}
+
 int sym_name_compare(struct avl2_node_type_ *n1, struct avl2_node_type_ *n2) {
   if (!n1 || !n2) {
     return 0;
@@ -177,7 +181,7 @@ void *get_undefined_sym(void *arg) {
   elf_file_descr_t *elf_file_descr = NULL;
   char *name = NULL;
   producer_thread_ctx_t *ctx = (producer_thread_ctx_t *)arg;
-  sym_thread_data_t *data = (sym_thread_data_t *)ctx->user_data;
+  thread_user_data_t *data = (thread_user_data_t *)ctx->user_data;
   printf("><SB> %s() producer thread ctx at: %p\n", __func__, (void *)ctx);
   rc = process_elf_file(data->fd, &elf_file_descr);
   if (rc == EXIT_SUCCESS) {
@@ -236,7 +240,8 @@ void *get_undefined_sym(void *arg) {
     printf("><SB> %s() Last producer, sending termination signal.\n", __func__);
     // Sending broadcast to the consumer only if no more producers left,
     // otherwise just decrement the producer counter and return.
-    ctx->buffer->producer_done = true;
+    atomic_store_explicit(&ctx->buffer->producer_done, true,
+                          memory_order_release);
     pthread_cond_broadcast(&ctx->buffer->not_empty);
   }
   pthread_mutex_unlock(&ctx->buffer->write_mutex);
@@ -246,12 +251,11 @@ void *get_undefined_sym(void *arg) {
   THREAD_RETURN(rc);
 }
 
-int search_for_lib(producer_thread_ctx_t *ctx) {
+int search_for_lib(mpsc_buffer_t *buffer, char *current_path) {
   DIR *dir_stream = NULL;
   struct dirent *dir_entry = NULL;
   int rc = EXIT_SUCCESS;
   char lib_suffix[] = {".so"};
-  char *current_path = (char *)ctx->user_data;
 
   // printf("><SB> %s() started, current directory: %s\n", __func__,
   //     ctx->buffert_path);
@@ -270,22 +274,19 @@ int search_for_lib(producer_thread_ctx_t *ctx) {
         } else {
           // printf("><SB> found directory: %s, entering...\n",
           // dir_entry->d_name);
-          producer_thread_ctx_t np = {
-              .buffer = ctx->buffer,
-          };
-          np.user_data = calloc(PATH_MAX, 1);
-          if (!np.user_data) {
+          char *new_current_path = calloc(PATH_MAX, 1);
+          if (!new_current_path) {
             rc = ENOMEM;
             return rc;
           }
-          snprintf((char *)np.user_data, PATH_MAX, "%s/%s", current_path,
+          snprintf((char *)new_current_path, PATH_MAX, "%s/%s", current_path,
                    dir_entry->d_name);
-          if ((rc = search_for_lib(&np)) != EXIT_SUCCESS) {
+          if ((rc = search_for_lib(buffer, new_current_path)) != EXIT_SUCCESS) {
             return rc;
           }
-          if (np.user_data) {
-            free(np.user_data);
-            np.user_data = NULL;
+          if (new_current_path) {
+            free(new_current_path);
+            new_current_path = NULL;
           }
         }
       } else {
@@ -298,23 +299,23 @@ int search_for_lib(producer_thread_ctx_t *ctx) {
                    lib_suffix) != 0) {
           continue;
         }
-        // printf("><SB> %s() library: %s\n", __func__, dir_entry->d_name);
-        pthread_mutex_lock(&ctx->buffer->write_mutex);
-        while (buffer_is_full(ctx->buffer)) {
-          pthread_cond_wait(&ctx->buffer->not_full, &ctx->buffer->write_mutex);
+        printf("><SB> %s() library: %s\n", __func__, dir_entry->d_name);
+        pthread_mutex_lock(&buffer->write_mutex);
+        while (buffer_is_full(buffer)) {
+          pthread_cond_wait(&buffer->not_full, &buffer->write_mutex);
         }
 
-        ctx->buffer->buffer[ctx->buffer->tail] = calloc(PATH_MAX, 1);
+        buffer->buffer[buffer->tail] = calloc(PATH_MAX, 1);
 
-        snprintf(ctx->buffer->buffer[ctx->buffer->tail], PATH_MAX, "%s/%s",
-                 current_path, dir_entry->d_name);
-        if (ctx->buffer->tail + 1 < MAX_LIB_ENTRY) {
-          ctx->buffer->tail++;
+        snprintf(buffer->buffer[buffer->tail], PATH_MAX, "%s/%s", current_path,
+                 dir_entry->d_name);
+        if (buffer->tail + 1 < MAX_LIB_ENTRY) {
+          buffer->tail++;
         } else {
-          ctx->buffer->tail = 0;
+          buffer->tail = 0;
         }
-        pthread_cond_signal(&ctx->buffer->not_empty);
-        pthread_mutex_unlock(&ctx->buffer->write_mutex);
+        pthread_cond_signal(&buffer->not_empty);
+        pthread_mutex_unlock(&buffer->write_mutex);
 
         // printf("><SB> found library: %s \n", dir_entry->d_name);
       }
@@ -333,17 +334,22 @@ int search_for_lib(producer_thread_ctx_t *ctx) {
 void *search_for_lib_thread(void *arg) {
   int rc = EXIT_SUCCESS;
   producer_thread_ctx_t *ctx = (producer_thread_ctx_t *)arg;
-
+  thread_user_data_t *data = (thread_user_data_t *)ctx->user_data;
   // printf("><SB> %s() thread started, current directory: %s\n", __func__,
   //     ctx->buffert_path);
-  rc = search_for_lib(ctx);
+
+  printf("><SB> %s() current path: %s\n", __func__, data->lib_path);
+  rc = search_for_lib(ctx->buffer, data->lib_path);
 
   // Informing that the search for libs has been completed
+  printf("><SB> %s() has been completed\n", __func__);
   pthread_mutex_lock(&ctx->buffer->write_mutex);
-  ctx->buffer->producer_done = true;
+  atomic_store_explicit(&ctx->buffer->producer_done, true,
+                        memory_order_release);
   pthread_cond_broadcast(&ctx->buffer->not_empty);
   pthread_mutex_unlock(&ctx->buffer->write_mutex);
-  printf("><SB> %s() thread finished, with error code: %d\n", __func__, rc);
+  printf("><SB> %s() has signaled completion, with error code: %d\n", __func__,
+         rc);
   if (rc == EXIT_SUCCESS) {
     rc = EOF;
   }
@@ -372,10 +378,9 @@ int create_producer_thread_ctx(producer_thread_ctx_t **ctx) {
     pthread_cond_init(&buffer->not_empty, NULL);
     pthread_cond_init(&buffer->not_full, NULL);
     pthread_mutex_init(&buffer->write_mutex, NULL);
-    buffer->producer_done = false;
+    atomic_store_explicit(&buffer->producer_done, false, memory_order_release);
   }
   if (rc == EXIT_SUCCESS) {
-    ctx_n->search_t = 0;
     ctx_n->buffer = buffer;
     *ctx = ctx_n;
   } else {
@@ -413,39 +418,44 @@ void destroy_producer_thread_ctx(producer_thread_ctx_t *ctx) {
   }
 }
 
-int fetch_library_name(producer_thread_ctx_t *ctx, char **lib_name) {
+int fetch_library_name(mpsc_buffer_t *buffer, pthread_t lib_search_thread_id,
+                       char **lib_name) {
   int rc = EXIT_SUCCESS;
   void *search_t_rc = EXIT_SUCCESS;
 
-  pthread_mutex_lock(&ctx->buffer->write_mutex);
-  while (buffer_is_empty(ctx->buffer) && !ctx->buffer->producer_done) {
-    pthread_cond_wait(&ctx->buffer->not_empty, &ctx->buffer->write_mutex);
+  if (is_buffer_producer_done(buffer)) {
+    return EOF;
+  }
+  pthread_mutex_lock(&buffer->write_mutex);
+  while (buffer_is_empty(buffer) && !buffer->producer_done) {
+    pthread_cond_wait(&buffer->not_empty, &buffer->write_mutex);
   }
 
-  if (!buffer_is_empty(ctx->buffer)) {
+  if (!buffer_is_empty(buffer)) {
     // printf("><SB> signalling a library to process...");
     char *n = NULL;
-    n = malloc(strlen(ctx->buffer->buffer[ctx->buffer->head]) + 1);
+    n = malloc(strlen(buffer->buffer[buffer->head]) + 1);
     if (!n) {
       return ENOMEM;
     }
-    memcpy(n, ctx->buffer->buffer[ctx->buffer->head],
-           strlen(ctx->buffer->buffer[ctx->buffer->head]) + 1);
-    free(ctx->buffer->buffer[ctx->buffer->head]);
-    if (ctx->buffer->head + 1 < MAX_LIB_ENTRY) {
-      ctx->buffer->head++;
+    memcpy(n, buffer->buffer[buffer->head],
+           strlen(buffer->buffer[buffer->head]) + 1);
+    free(buffer->buffer[buffer->head]);
+    if (buffer->head + 1 < MAX_LIB_ENTRY) {
+      buffer->head++;
     } else {
-      ctx->buffer->head = 0;
+      buffer->head = 0;
     }
-    pthread_cond_broadcast(&ctx->buffer->not_full);
-    pthread_mutex_unlock(&ctx->buffer->write_mutex);
+    pthread_cond_broadcast(&buffer->not_full);
+    pthread_mutex_unlock(&buffer->write_mutex);
     *lib_name = n;
-  } else if (ctx->buffer->producer_done) {
-    pthread_mutex_unlock(&ctx->buffer->write_mutex);
-    pthread_join(ctx->search_t, &search_t_rc);
+  } else if (buffer->producer_done) {
+    pthread_mutex_unlock(&buffer->write_mutex);
+    pthread_join(lib_search_thread_id, &search_t_rc);
     rc = (int)(long)search_t_rc;
     if (rc != EXIT_SUCCESS && rc != EOF) {
-      printf("><SB> Search thread failed with error code: %s\n", strerror(rc));
+      printf("><SB> lib search thread failed with error code: %s\n",
+             strerror(rc));
     }
   } else {
     // Impossible situation
@@ -455,50 +465,42 @@ int fetch_library_name(producer_thread_ctx_t *ctx, char **lib_name) {
   return rc;
 }
 
-int find_dependency(lib_node_t *lib_node, dependency_tree_t **deps,
-                    char *lib_path) {
-  int rc = EXIT_SUCCESS;
-  sym_cache_t *cache = NULL;
-  producer_thread_ctx_t *ctx = NULL;
-  char *lib_name = NULL;
-
-  //  printf("><SB> %s() started, current directory: %s\n", __func__,
-  //  lib_path);
-
-  rc = create_producer_thread_ctx(&ctx);
-  if (rc != EXIT_SUCCESS) {
-    return rc;
-  }
-
-  // Starting thread to look for libraries
-  pthread_create(&ctx->search_t, NULL, search_for_lib_thread, (void *)ctx);
-
-  while ((rc = fetch_library_name(ctx, &lib_name)) == EXIT_SUCCESS) {
-    printf("><SB> processing library: %s\n", lib_name);
-
-    // For now freeing memory
-    free(lib_name);
-    lib_name = NULL;
-  }
-
-  if (rc == EOF) {
-    // Fetching files completed normally with expected EOF
-    rc = EXIT_SUCCESS;
-  }
-  // printf("><SB> %s() finished with error code: %d\n", __func__, rc);
-  destroy_producer_thread_ctx(ctx);
-
-  return rc;
-}
+bool check_sym_cache(sym_cache_t *cache, char *sym) { return false; }
 
 void *resolve_undefined_sym(void *arg) {
   int rc = EXIT_SUCCESS;
   producer_thread_ctx_t *ctx = (producer_thread_ctx_t *)arg;
-  sym_thread_data_t *data = (sym_thread_data_t *)ctx->user_data;
+  thread_user_data_t *data = (thread_user_data_t *)ctx->user_data;
+  sym_cache_t *cache = NULL;
 
-  printf("><SB> %s() current path: %s\n", __func__, data->lib_path);
-  printf("><SB> %s() producer thread ctx at: %p\n", __func__, (void *)ctx);
-  while (true) {
+  // Starting lib search thread to feed this function with found
+  // libraries
+  thread_user_data_t *lib_search_thread_user_data =
+      malloc(sizeof(thread_user_data_t));
+  if (!lib_search_thread_user_data) {
+    rc = ENOMEM;
+    THREAD_RETURN(rc);
+  }
+  lib_search_thread_user_data->lib_path = calloc(strlen(data->lib_path) + 1, 1);
+  if (!lib_search_thread_user_data->lib_path) {
+    rc = ENOMEM;
+    THREAD_RETURN(rc);
+  }
+  producer_thread_ctx_t *lib_search_producer_ctx = NULL;
+  strncpy(lib_search_thread_user_data->lib_path, data->lib_path,
+          strlen(data->lib_path));
+  rc = create_producer_thread_ctx(&lib_search_producer_ctx);
+  if (rc != EXIT_SUCCESS) {
+    THREAD_RETURN(rc);
+  }
+  lib_search_producer_ctx->user_data = (void *)lib_search_thread_user_data;
+
+  pthread_t lib_search_thread_id;
+  void *lib_search_thread_rc;
+  pthread_create(&lib_search_thread_id, NULL, search_for_lib_thread,
+                 lib_search_producer_ctx);
+
+  while (true && rc == EXIT_SUCCESS) {
     pthread_mutex_lock(&ctx->buffer->write_mutex);
     while (buffer_is_empty(ctx->buffer) && !ctx->buffer->producer_done) {
       // printf("><SB> %s() waiting on a signal\n", __func__);
@@ -524,25 +526,46 @@ void *resolve_undefined_sym(void *arg) {
       pthread_cond_broadcast(&ctx->buffer->not_full);
       pthread_mutex_unlock(&ctx->buffer->write_mutex);
       printf("><SB> %s() Undefind sym: %s\n", __func__, sym);
+      // Got Undefined symbol, need to check the cache if it has already been
+      // found, if it has, record the library name and add this library's
+      // undefined symbols to the Undefined Symbol Buffer, for further
+      // resolution.
+      if (check_sym_cache(cache, sym)) {
+        // Symbol is found in the cache
+      } else {
+        // Symbol is not found in the cache
+        char *lib_name = NULL;
+        rc = fetch_library_name(lib_search_producer_ctx->buffer,
+                                lib_search_thread_id, &lib_name);
+        if (rc == EXIT_SUCCESS) {
+          printf("><SB> %s() found library: %s\n", __func__, lib_name);
+          free(lib_name);
+          lib_name = NULL;
+        } else if (rc == EOF) {
+          rc = EXIT_SUCCESS;
+        }
+      }
       // For now just release it
       free(sym);
       sym = NULL;
-    } else if (ctx->buffer->producer_done) {
+    } else if (is_buffer_producer_done(ctx->buffer)) {
       printf("><SB> %s() received producer is done signal, exiting...\n",
              __func__);
       pthread_mutex_unlock(&ctx->buffer->write_mutex);
-      //      pthread_join(ctx->search_t, &search_t_rc);
-      // rc = (int)(long)search_t_rc;
-      // if (rc != EXIT_SUCCESS && rc != EOF) {
-      //   printf("><SB> Search thread failed with error code: %s\n",
-      //          strerror(rc));
-      // }
       break;
     } else {
       // Impossible situation
       assert(0);
     }
   }
+  if (lib_search_thread_user_data) {
+    if (lib_search_thread_user_data->lib_path) {
+      free(lib_search_thread_user_data->lib_path);
+      lib_search_thread_user_data->lib_path = NULL;
+    }
+  }
+  pthread_join(lib_search_thread_id, &lib_search_thread_rc);
+  destroy_producer_thread_ctx(lib_search_producer_ctx);
 
   THREAD_RETURN(rc);
 }

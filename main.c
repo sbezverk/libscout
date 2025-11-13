@@ -18,13 +18,13 @@ void *main_thread(void *arg) {
   main_thread_ctx_t *ctx = (main_thread_ctx_t *)arg;
   int exec_fd = -1;
 
-  sym_thread_data_t *sym_thread_data = malloc(sizeof(sym_thread_data_t));
-  if (!sym_thread_data) {
+  thread_user_data_t *thread_user_data = malloc(sizeof(thread_user_data_t));
+  if (!thread_user_data) {
     rc = ENOMEM;
     THREAD_RETURN(rc);
   }
-  sym_thread_data->lib_path = calloc(strlen(ctx->lib_path) + 1, 1);
-  if (!sym_thread_data->lib_path) {
+  thread_user_data->lib_path = calloc(strlen(ctx->lib_path) + 1, 1);
+  if (!thread_user_data->lib_path) {
     rc = ENOMEM;
     THREAD_RETURN(rc);
   }
@@ -37,19 +37,14 @@ void *main_thread(void *arg) {
   }
 
   producer_thread_ctx_t *und_sym_producer_ctx = NULL;
-  sym_thread_data->fd = exec_fd;
-  strncpy(sym_thread_data->lib_path, ctx->lib_path, strlen(ctx->lib_path));
+  thread_user_data->fd = exec_fd;
+  strncpy(thread_user_data->lib_path, ctx->lib_path, strlen(ctx->lib_path));
 
   rc = create_producer_thread_ctx(&und_sym_producer_ctx);
   if (rc != EXIT_SUCCESS) {
     THREAD_RETURN(rc);
   }
-  und_sym_producer_ctx->user_data = (void *)sym_thread_data;
-  printf("><SB> user data addr: %p user data points to: %p\n",
-         &und_sym_producer_ctx->user_data,
-         (void *)und_sym_producer_ctx->user_data);
-  printf("><SB> sym th data addr: %p sym th  data points to: %p\n",
-         &sym_thread_data, (void *)sym_thread_data);
+  und_sym_producer_ctx->user_data = (void *)thread_user_data;
 
   pthread_t producer_thread_id;
   pthread_t consumer_thread_id;
@@ -75,8 +70,8 @@ void *main_thread(void *arg) {
   printf("><SB> _%s() resolve_undefined_sym finished with rc: %s\n", __func__,
          strerror(rc));
 
-  free(sym_thread_data->lib_path);
-  sym_thread_data->lib_path = NULL;
+  free(thread_user_data->lib_path);
+  thread_user_data->lib_path = NULL;
   close(exec_fd);
   destroy_producer_thread_ctx(und_sym_producer_ctx);
 
