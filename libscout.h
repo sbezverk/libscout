@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 
+#define THREAD_RETURN(rc) return (void *)(long)rc
 #define MAX_LIB_ENTRY 2
 
 typedef struct sym_node_ {
@@ -40,17 +41,36 @@ int find_dependency(lib_node_t *lib_node, dependency_tree_t **deps,
                     char *lib_path);
 
 typedef struct mpsc_buffer_ {
-  char buffer[MAX_LIB_ENTRY][PATH_MAX];
+  // Buffer of pointers to opaque objects
+  void *buffer[MAX_LIB_ENTRY];
   size_t head;
   size_t tail;
   pthread_mutex_t write_mutex;
   pthread_cond_t not_empty;
   pthread_cond_t not_full;
+  int producer_count;
   bool producer_done;
 } mpsc_buffer_t;
 
-typedef struct search_thread_ctx_ {
-  char current_path[PATH_MAX];
-  mpsc_buffer_t *data;
+typedef struct producer_thread_ctx_ {
+  void *user_data;
+  mpsc_buffer_t *buffer;
   pthread_t search_t;
-} search_thread_ctx_t;
+} producer_thread_ctx_t;
+
+typedef struct main_thread_ctx_ {
+  char *exe_file_name;
+  char *lib_path;
+} main_thread_ctx_t;
+
+typedef struct sym_thread_data_ {
+  int fd;
+  char *lib_path;
+} sym_thread_data_t;
+
+void *get_undefined_sym(void *arg);
+void *resolve_undefined_sym(void *arg);
+
+int create_producer_thread_ctx(producer_thread_ctx_t **ctx);
+
+void destroy_producer_thread_ctx(producer_thread_ctx_t *ctx);
