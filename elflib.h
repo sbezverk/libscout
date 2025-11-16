@@ -3,6 +3,8 @@
 #include <elf.h>
 #include <stdbool.h>
 
+#define ELF_ST_TYPE(info) ((info) & 0xf)
+
 typedef union elf_hdr_ {
   Elf64_Ehdr elf_64_hdr;
   Elf32_Ehdr elf_32_hdr;
@@ -112,4 +114,7 @@ bool elf_sym_is_global(elf_file_descr_t *elf_file_descr,
                        elf_sym_tbl_entry_u_t elf_sym_table);
 
 int elf_sym_get_st_name(elf_file_descr_t *elf_file_descr,
+                        elf_sym_tbl_entry_u_t elf_sym_table);
+
+int elf_sym_get_st_info(elf_file_descr_t *elf_file_descr,
                         elf_sym_tbl_entry_u_t elf_sym_table);

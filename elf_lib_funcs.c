@@ -368,6 +368,18 @@ int elf_sym_get_st_name(elf_file_descr_t *elf_file_descr,
   }
 }
 
+int elf_sym_get_st_info(elf_file_descr_t *elf_file_descr,
+                        elf_sym_tbl_entry_u_t elf_sym_table) {
+  if (!elf_file_descr) {
+    return -1;
+  }
+  if (elf_file_descr->is_64bit) {
+    return elf_sym_table.elf_64_sym_entry.st_info;
+  } else {
+    return elf_sym_table.elf_32_sym_entry.st_info;
+  }
+}
+
 static int get_elf_sec_data(elf_file_descr_t *elf_file_descr, int indx,
                             void *data) {
   int rc = EXIT_SUCCESS;
@@ -542,20 +554,6 @@ static int elf_populate_str_table(elf_file_descr_t *file_p, int sec_indx,
              file_p->elf_str_tbls[tbl_indx].elf_str_tbl_name);
 #endif
     }
-    // int i = 0;
-    // char *str = NULL;
-    // do {
-    //   if (str) {
-    //     free(str);
-    //     str = NULL;
-    //   }
-    //   get_elf_str_from_table(file_p->elf_str_tbls[tbl_indx].elf_str_table +
-    //   1,
-    //                          file_p->elf_str_tbls[tbl_indx].elf_str_tbl_size,
-    //                          i, &str);
-    //   i += strlen(str) + 1;
-    //   printf("><SB> %s\n", str);
-    // } while (*str);
   }
 
   return rc;
@@ -565,8 +563,9 @@ static int elf_populate_sym_table(elf_file_descr_t *file_p, int sec_indx,
                                   int tbl_indx) {
   int rc = EXIT_SUCCESS;
 
-  file_p->elf_sym_tbls[tbl_indx].elf_sym_table =
-      malloc(get_elf_sec_size(file_p, sec_indx));
+  int sec_size = get_elf_sec_size(file_p, sec_indx);
+  printf("><SB> >>>>>>> Section: %d size: %d\n", sec_indx, sec_size);
+  file_p->elf_sym_tbls[tbl_indx].elf_sym_table = malloc(sec_size);
   if (!file_p->elf_sym_tbls[tbl_indx].elf_sym_table) {
     rc = ENOMEM;
   }
@@ -600,25 +599,6 @@ static int elf_populate_sym_table(elf_file_descr_t *file_p, int sec_indx,
              file_p->elf_sym_tbls[tbl_indx].elf_sym_tbl_name);
 #endif
     }
-    // int i = 0;
-    // char *str = NULL;
-    // do {
-    //   if (str) {
-    //     free(str);
-    //     str = NULL;
-    //   }
-    //   int st_name = elf_sym_get_st_name(
-    //       file_p, file_p->elf_sym_tbls[tbl_indx].elf_sym_table[i]);
-    //   rc = elf_sym_get_string(file_p,
-    //   file_p->elf_sym_tbls[tbl_indx].is_dynamic,
-    //                           st_name, &str);
-    //   if (rc == EXIT_SUCCESS) {
-    //     printf("><SB> %s\n", str);
-    //   } else {
-    //     printf("><SB> failed to find st_name\n");
-    //     break;
-    //   }
-    // } while (*str);
   }
 
   return rc;
@@ -813,7 +793,6 @@ static int process_nt_file(bool is_64bit, char *data, int size) {
   const char *offset_start_ptr = addr_start_ptr + (num_entry * (field_sz * 2));
   const char *fn_start_ptr = offset_start_ptr + (num_entry * field_sz);
 
-  char *fn = NULL;
   int indx = 0;
   for (int i = 0; i < num_entry; i++) {
     Elf64_Addr a_1 = 0, a_2 = 0, off_1 = 0;
@@ -823,7 +802,7 @@ static int process_nt_file(bool is_64bit, char *data, int size) {
     memcpy(&off_1, offset_start_ptr + (i * field_sz), field_sz);
     printf("Offset: 0x%0lx\n", off_1);
     printf("file name: ");
-    indx += printf_file_name(fn_start_ptr + indx,
+    indx += printf_file_name(((char *)fn_start_ptr) + indx,
                              size - (fn_start_ptr - data) - indx);
   }
 
@@ -984,6 +963,56 @@ static int populate_sym_table(elf_file_descr_t *file_p, int indx) {
     rc = elf_populate_sym_table(file_p, indx, file_p->elf_sym_tbl_num);
     if (rc == EXIT_SUCCESS) {
       file_p->elf_sym_tbl_num++;
+    }
+  }
+
+  return rc;
+}
+
+int print_str_table(elf_file_descr_t *file_p) {
+  int rc = EXIT_SUCCESS;
+  for (int y = 0; y < file_p->elf_str_tbl_num; y++) {
+    printf("><SB> String table name: %s Section index: %d\n",
+           file_p->elf_str_tbls[y].elf_str_tbl_name,
+           file_p->elf_str_tbls[y].sec_indx);
+    int i = 0;
+    char *str = NULL;
+    do {
+      free(str);
+      str = NULL;
+      get_elf_str_from_table(file_p->elf_str_tbls[y].elf_str_table + 1,
+                             file_p->elf_str_tbls[y].elf_str_tbl_size, i, &str);
+      i += strlen(str) + 1;
+      printf("\t- %s\n", str);
+    } while (*str);
+  }
+
+  return rc;
+}
+
+int print_sym_table(elf_file_descr_t *file_p) {
+  int rc = EXIT_SUCCESS;
+
+  for (int y = 0; y < file_p->elf_sym_tbl_num; y++) {
+    printf("><SB> Symbol table name: %s Section index: %d\n",
+           file_p->elf_sym_tbls[y].elf_sym_tbl_name,
+           file_p->elf_sym_tbls[y].sec_indx);
+    char *str = NULL;
+    for (int i = 0; i < file_p->elf_sym_tbls[y].elf_sym_tbl_num_entry; i++) {
+      if (ELF_ST_TYPE(elf_sym_get_st_info(
+              file_p, file_p->elf_sym_tbls[y].elf_sym_table[i])) ==
+          STT_OBJECT) {
+        int st_name = elf_sym_get_st_name(
+            file_p, file_p->elf_sym_tbls[y].elf_sym_table[i]);
+        rc = elf_sym_get_string(file_p, file_p->elf_sym_tbls[y].is_dynamic,
+                                st_name, &str);
+        if (rc == EXIT_SUCCESS) {
+          printf("\t- %s\n", str);
+        } else {
+          printf("><SB> failed to find st_name\n");
+          break;
+        }
+      }
     }
   }
 
@@ -1212,6 +1241,10 @@ int process_elf_file(int fd, elf_file_descr_t **elf_file_descr) {
     free_elf_file_descr(file_p);
   } else {
     *elf_file_descr = file_p;
+#ifdef DEBUG
+    print_str_table(file_p);
+    print_sym_table(file_p);
+#endif
   }
 
   return rc;
