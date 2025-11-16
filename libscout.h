@@ -51,6 +51,7 @@ typedef struct mpsc_buffer_ {
   pthread_cond_t not_full;
   int producer_count;
   _Atomic bool producer_done;
+  _Atomic bool shutdown_request;
 } mpsc_buffer_t;
 
 typedef struct producer_thread_ctx_ {

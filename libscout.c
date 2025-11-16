@@ -21,6 +21,10 @@ static bool is_buffer_producer_done(mpsc_buffer_t *buffer) {
   return atomic_load(&buffer->producer_done);
 }
 
+static bool is_buffer_producer_shutdown_requested(mpsc_buffer_t *buffer) {
+  return atomic_load_explicit(&buffer->shutdown_request, memory_order_acquire);
+}
+
 int sym_name_compare(struct avl2_node_type_ *n1, struct avl2_node_type_ *n2) {
   if (!n1 || !n2) {
     return 0;
@@ -239,6 +243,9 @@ int search_for_lib(mpsc_buffer_t *buffer, char *current_path) {
 
   // printf("><SB> %s() started, current directory: %s\n", __func__,
   //     ctx->buffert_path);
+  if (is_buffer_producer_shutdown_requested(buffer)) {
+    return rc;
+  }
   if ((dir_stream = opendir(current_path)) == NULL) {
     rc = errno;
   }
@@ -280,10 +287,16 @@ int search_for_lib(mpsc_buffer_t *buffer, char *current_path) {
           continue;
         }
         pthread_mutex_lock(&buffer->write_mutex);
-        while (buffer_is_full(buffer)) {
+        while (buffer_is_full(buffer) &&
+               !is_buffer_producer_shutdown_requested(buffer)) {
           pthread_cond_wait(&buffer->not_full, &buffer->write_mutex);
         }
-
+        if (is_buffer_producer_shutdown_requested(buffer)) {
+          printf("><SB> Consumer requested to shutdown, exiting...\n");
+          // Producer needs to terminate
+          pthread_mutex_unlock(&buffer->write_mutex);
+          goto cleanup;
+        }
         buffer->buffer[buffer->tail] = calloc(PATH_MAX, 1);
 
         snprintf(buffer->buffer[buffer->tail], PATH_MAX, "%s/%s", current_path,
@@ -298,7 +311,8 @@ int search_for_lib(mpsc_buffer_t *buffer, char *current_path) {
       }
     }
   }
-  // printf("Complete processing path: %s\n", current_path);
+// printf("Complete processing path: %s\n", current_path);
+cleanup:
   if (dir_stream) {
     closedir(dir_stream);
     dir_stream = NULL;
@@ -331,7 +345,7 @@ void *search_for_lib_thread(void *arg) {
     rc = EOF;
   }
 
-  return (void *)(long)rc;
+  THREAD_RETURN(rc);
 }
 
 int create_producer_thread_ctx(producer_thread_ctx_t **ctx) {
@@ -356,6 +370,8 @@ int create_producer_thread_ctx(producer_thread_ctx_t **ctx) {
     pthread_cond_init(&buffer->not_full, NULL);
     pthread_mutex_init(&buffer->write_mutex, NULL);
     atomic_store_explicit(&buffer->producer_done, false, memory_order_release);
+    atomic_store_explicit(&buffer->shutdown_request, false,
+                          memory_order_release);
   }
   if (rc == EXIT_SUCCESS) {
     ctx_n->buffer = buffer;
@@ -383,7 +399,14 @@ void destroy_producer_thread_ctx(producer_thread_ctx_t *ctx) {
       pthread_cond_destroy(&ctx->buffer->not_empty);
       pthread_cond_destroy(&ctx->buffer->not_full);
       pthread_mutex_destroy(&ctx->buffer->write_mutex);
+      for (int i = 0; i < MAX_LIB_ENTRY; i++) {
+        if (ctx->buffer->buffer[i]) {
+          free(ctx->buffer->buffer[i]);
+          ctx->buffer->buffer[i] = NULL;
+        }
+      }
       free(ctx->buffer);
+      ctx->buffer = NULL;
     }
     ctx->buffer = NULL;
     if (ctx->user_data) {
@@ -418,6 +441,7 @@ int fetch_library_name(mpsc_buffer_t *buffer, pthread_t lib_search_thread_id,
     memcpy(n, buffer->buffer[buffer->head],
            strlen(buffer->buffer[buffer->head]) + 1);
     free(buffer->buffer[buffer->head]);
+    buffer->buffer[buffer->head] = NULL;
     if (buffer->head + 1 < MAX_LIB_ENTRY) {
       buffer->head++;
     } else {
@@ -700,6 +724,7 @@ void *resolve_undefined_sym(void *arg) {
       memcpy(sym, ctx->buffer->buffer[ctx->buffer->head],
              strlen(ctx->buffer->buffer[ctx->buffer->head]) + 1);
       free(ctx->buffer->buffer[ctx->buffer->head]);
+      ctx->buffer->buffer[ctx->buffer->head] = NULL;
       if (ctx->buffer->head + 1 < MAX_LIB_ENTRY) {
         ctx->buffer->head++;
       } else {
@@ -746,14 +771,6 @@ void *resolve_undefined_sym(void *arg) {
       assert(0);
     }
   }
-  if (lib_search_thread_user_data) {
-    if (lib_search_thread_user_data->lib_path) {
-      free(lib_search_thread_user_data->lib_path);
-      lib_search_thread_user_data->lib_path = NULL;
-    }
-  }
-
-  // TODO: (sbezverk) Add cache clean up
   if (cache) {
     if (cache->cache) {
       avl2_destroy(cache->cache, destroy_cache_node);
@@ -763,7 +780,20 @@ void *resolve_undefined_sym(void *arg) {
     free(cache);
     cache = NULL;
   }
+  printf("><SB> Consumer sending shutdown request to the producer...\n");
+  atomic_store_explicit(&lib_search_producer_ctx->buffer->shutdown_request,
+                        true, memory_order_relaxed);
+  pthread_mutex_lock(&lib_search_producer_ctx->buffer->write_mutex);
+  pthread_cond_broadcast(&lib_search_producer_ctx->buffer->not_full);
+  pthread_mutex_unlock(&lib_search_producer_ctx->buffer->write_mutex);
+
   pthread_join(lib_search_thread_id, &lib_search_thread_rc);
+  if (lib_search_thread_user_data) {
+    if (lib_search_thread_user_data->lib_path) {
+      free(lib_search_thread_user_data->lib_path);
+      lib_search_thread_user_data->lib_path = NULL;
+    }
+  }
   destroy_producer_thread_ctx(lib_search_producer_ctx);
 
   THREAD_RETURN(rc);
