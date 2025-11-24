@@ -102,19 +102,19 @@ int elf_sym_get_string(elf_file_descr_t *elf_file_descr, bool is_dynamic,
                        int st_name, char **name);
 
 bool elf_sym_is_defined(elf_file_descr_t *elf_file_descr,
-                        elf_sym_tbl_entry_u_t elf_sym_table);
+                        void *elf_sym_table_entry);
 
 bool elf_sym_is_weak(elf_file_descr_t *elf_file_descr,
-                     elf_sym_tbl_entry_u_t elf_sym_table);
+                     void *elf_sym_table_entry);
 
 bool elf_sym_is_local(elf_file_descr_t *elf_file_descr,
-                      elf_sym_tbl_entry_u_t elf_sym_table);
+                      void *elf_sym_table_entry);
 
 bool elf_sym_is_global(elf_file_descr_t *elf_file_descr,
-                       elf_sym_tbl_entry_u_t elf_sym_table);
+                       void *elf_sym_table_entry);
 
 int elf_sym_get_st_name(elf_file_descr_t *elf_file_descr,
-                        elf_sym_tbl_entry_u_t elf_sym_table);
+                        void *elf_sym_table_entry);
 
 int elf_sym_get_st_info(elf_file_descr_t *elf_file_descr,
-                        elf_sym_tbl_entry_u_t elf_sym_table);
+                        void *elf_sym_table_entry);

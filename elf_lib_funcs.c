@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "elflib.h"
+#include "iter.h"
 
 void free_elf_file_descr(elf_file_descr_t *elf_file_descr) {
   if (elf_file_descr) {
@@ -312,71 +313,62 @@ static int get_elf_sym_tab_entry_size(elf_file_descr_t *elf_file_descr) {
 }
 
 bool elf_sym_is_defined(elf_file_descr_t *elf_file_descr,
-                        elf_sym_tbl_entry_u_t elf_sym_table) {
+                        void *elf_sym_table_entry) {
   if (!elf_file_descr) {
     return false;
   }
   if (elf_file_descr->is_64bit) {
-    return elf_sym_table.elf_64_sym_entry.st_shndx != SHN_UNDEF;
+    return ((Elf64_Sym *)(elf_sym_table_entry))->st_shndx != SHN_UNDEF;
   } else {
-    return elf_sym_table.elf_32_sym_entry.st_shndx != SHN_UNDEF;
+    return ((Elf32_Sym *)(elf_sym_table_entry))->st_shndx != SHN_UNDEF;
   }
 }
 bool elf_sym_is_weak(elf_file_descr_t *elf_file_descr,
-                     elf_sym_tbl_entry_u_t elf_sym_table) {
+                     void *elf_sym_table_entry) {
   if (!elf_file_descr) {
     return false;
   }
-  if (elf_file_descr->is_64bit) {
-    return ((elf_sym_table.elf_64_sym_entry.st_info & 0xF0) >> 4) == STB_WEAK;
-  } else {
-    return ((elf_sym_table.elf_32_sym_entry.st_info & 0xF0) >> 4) == STB_WEAK;
-  }
+  return (elf_sym_get_st_info(elf_file_descr, elf_sym_table_entry) >> 4) ==
+         STB_WEAK;
 }
 bool elf_sym_is_local(elf_file_descr_t *elf_file_descr,
-                      elf_sym_tbl_entry_u_t elf_sym_table) {
+                      void *elf_sym_table_entry) {
   if (!elf_file_descr) {
     return false;
   }
-  if (elf_file_descr->is_64bit) {
-    return ((elf_sym_table.elf_64_sym_entry.st_info & 0xF0) >> 4) == STB_LOCAL;
-  } else {
-    return ((elf_sym_table.elf_32_sym_entry.st_info & 0xF0) >> 4) == STB_LOCAL;
-  }
+  return (elf_sym_get_st_info(elf_file_descr, elf_sym_table_entry) >> 4) ==
+         STB_LOCAL;
 }
 bool elf_sym_is_global(elf_file_descr_t *elf_file_descr,
-                       elf_sym_tbl_entry_u_t elf_sym_table) {
+                       void *elf_sym_table_entry) {
   if (!elf_file_descr) {
     return false;
   }
-  if (elf_file_descr->is_64bit) {
-    return ((elf_sym_table.elf_64_sym_entry.st_info & 0xF0) >> 4) == STB_GLOBAL;
-  } else {
-    return ((elf_sym_table.elf_32_sym_entry.st_info & 0xF0) >> 4) == STB_GLOBAL;
-  }
+  return (elf_sym_get_st_info(elf_file_descr, elf_sym_table_entry) >> 4) ==
+         STB_GLOBAL;
 }
 
 int elf_sym_get_st_name(elf_file_descr_t *elf_file_descr,
-                        elf_sym_tbl_entry_u_t elf_sym_table) {
+                        void *elf_sym_table_entry) {
   if (!elf_file_descr) {
     return -1;
   }
   if (elf_file_descr->is_64bit) {
-    return elf_sym_table.elf_64_sym_entry.st_name;
+    return ((Elf64_Sym *)(elf_sym_table_entry))->st_name;
   } else {
-    return elf_sym_table.elf_32_sym_entry.st_name;
+    return ((Elf32_Sym *)(elf_sym_table_entry))->st_name;
   }
 }
 
 int elf_sym_get_st_info(elf_file_descr_t *elf_file_descr,
-                        elf_sym_tbl_entry_u_t elf_sym_table) {
+                        void *elf_sym_table_entry) {
   if (!elf_file_descr) {
     return -1;
   }
   if (elf_file_descr->is_64bit) {
-    return elf_sym_table.elf_64_sym_entry.st_info;
+    return ((Elf64_Sym *)(elf_sym_table_entry))->st_info;
   } else {
-    return elf_sym_table.elf_32_sym_entry.st_info;
+    return ((Elf32_Sym *)(elf_sym_table_entry))->st_info;
   }
 }
 
@@ -564,11 +556,15 @@ static int elf_populate_sym_table(elf_file_descr_t *file_p, int sec_indx,
   int rc = EXIT_SUCCESS;
 
   int sec_size = get_elf_sec_size(file_p, sec_indx);
-  printf("><SB> >>>>>>> Section: %d size: %d\n", sec_indx, sec_size);
   file_p->elf_sym_tbls[tbl_indx].elf_sym_table = malloc(sec_size);
   if (!file_p->elf_sym_tbls[tbl_indx].elf_sym_table) {
     rc = ENOMEM;
   }
+#ifdef DEBUG
+  printf("><SB> >>>>>>> Table: %d Section: %d size: %d allocated at: %p\n",
+         tbl_indx, sec_indx, sec_size,
+         (void *)file_p->elf_sym_tbls[tbl_indx].elf_sym_table);
+#endif
   if (rc == EXIT_SUCCESS) {
     rc = get_elf_sec_data(file_p, sec_indx,
                           (void *)file_p->elf_sym_tbls[tbl_indx].elf_sym_table);
@@ -998,12 +994,22 @@ int print_sym_table(elf_file_descr_t *file_p) {
            file_p->elf_sym_tbls[y].elf_sym_tbl_name,
            file_p->elf_sym_tbls[y].sec_indx);
     char *str = NULL;
-    for (int i = 0; i < file_p->elf_sym_tbls[y].elf_sym_tbl_num_entry; i++) {
-      if (ELF_ST_TYPE(elf_sym_get_st_info(
-              file_p, file_p->elf_sym_tbls[y].elf_sym_table[i])) ==
-          STT_OBJECT) {
-        int st_name = elf_sym_get_st_name(
-            file_p, file_p->elf_sym_tbls[y].elf_sym_table[i]);
+    size_t entry_size = 0;
+    if (file_p->is_64bit) {
+      entry_size = sizeof(Elf64_Sym);
+    } else {
+      entry_size = sizeof(Elf32_Sym);
+    }
+    iterator_t *iter =
+        iterator_init((void *)file_p->elf_sym_tbls[y].elf_sym_table, entry_size,
+                      file_p->elf_sym_tbls[y].elf_sym_tbl_num_entry);
+    void *entry = NULL;
+    entry = iterator_next(iter);
+    while (entry) {
+      // for (int i = 0; i < file_p->elf_sym_tbls[y].elf_sym_tbl_num_entry; i++)
+      // {
+      if (ELF_ST_TYPE(elf_sym_get_st_info(file_p, entry)) == STT_OBJECT) {
+        int st_name = elf_sym_get_st_name(file_p, entry);
         rc = elf_sym_get_string(file_p, file_p->elf_sym_tbls[y].is_dynamic,
                                 st_name, &str);
         if (rc == EXIT_SUCCESS) {
@@ -1013,7 +1019,10 @@ int print_sym_table(elf_file_descr_t *file_p) {
           break;
         }
       }
+      // }
+      entry = iterator_next(iter);
     }
+    iterator_free(iter);
   }
 
   return rc;

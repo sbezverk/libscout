@@ -5,9 +5,12 @@ cc_binary(
     srcs = [
         "elf_lib_funcs.c",
         "elflib.h",
+        "iter.h",
+        "iterator.c",
         "libscout.c",
         "libscout.h",
         "main.c",
+        "search_for_lib.c",
     ],
     copts = [
         "--std=c23",

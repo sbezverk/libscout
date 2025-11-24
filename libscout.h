@@ -75,3 +75,13 @@ void *resolve_undefined_sym(void *arg);
 int create_producer_thread_ctx(producer_thread_ctx_t **ctx);
 
 void destroy_producer_thread_ctx(producer_thread_ctx_t *ctx);
+
+void *search_for_lib_thread(void *arg);
+
+bool buffer_is_empty(mpsc_buffer_t *b);
+
+bool buffer_is_full(mpsc_buffer_t *b);
+
+bool is_buffer_producer_done(mpsc_buffer_t *buffer);
+
+bool is_buffer_producer_shutdown_requested(mpsc_buffer_t *buffer);

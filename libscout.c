@@ -9,19 +9,20 @@
 
 #include "avl/avl_tree.h"
 #include "elflib.h"
+#include "iter.h"
 #include "libscout.h"
 
-static bool buffer_is_empty(mpsc_buffer_t *b) { return b->head == b->tail; }
+bool buffer_is_empty(mpsc_buffer_t *b) { return b->head == b->tail; }
 
-static bool buffer_is_full(mpsc_buffer_t *b) {
+bool buffer_is_full(mpsc_buffer_t *b) {
   return ((b->tail + 1) % MAX_LIB_ENTRY) == b->head;
 }
 
-static bool is_buffer_producer_done(mpsc_buffer_t *buffer) {
+bool is_buffer_producer_done(mpsc_buffer_t *buffer) {
   return atomic_load(&buffer->producer_done);
 }
 
-static bool is_buffer_producer_shutdown_requested(mpsc_buffer_t *buffer) {
+bool is_buffer_producer_shutdown_requested(mpsc_buffer_t *buffer) {
   return atomic_load_explicit(&buffer->shutdown_request, memory_order_acquire);
 }
 
@@ -105,19 +106,32 @@ static int init_tree(avl_tree_type **tree, avl2_compare_type avl_compare,
 
 void destroy_sym_node(avl2_node_type *node, avl_tree_type *lib_node) {
   if (((sym_node_t *)node)->sym_name) {
+#ifdef DEBUG
+    printf("><SB> %s(): removing sym %s\n", __func__,
+           ((sym_node_t *)node)->sym_name);
+#endif
     free(((sym_node_t *)node)->sym_name);
     ((sym_node_t *)node)->sym_name = NULL;
   }
   free(((sym_node_t *)node));
   node = NULL;
 }
+
 void destroy_cache_node(avl2_node_type *node, avl_tree_type *lib_node) {
   if (((lib_node_t *)node)->defined) {
+#ifdef DEBUG
+    printf("><SB> %s(): removing cached library %s defined symbols\n", __func__,
+           ((lib_node_t *)node)->lib_name);
+#endif
     avl2_destroy(((lib_node_t *)node)->defined, destroy_sym_node);
     free(((lib_node_t *)node)->defined);
     ((lib_node_t *)node)->defined = NULL;
   }
   if (((lib_node_t *)node)->undefined) {
+#ifdef DEBUG
+    printf("><SB> %s(): removing cached library %s undefined symbols\n",
+           __func__, ((lib_node_t *)node)->lib_name);
+#endif
     avl2_destroy(((lib_node_t *)node)->undefined, destroy_sym_node);
     free(((lib_node_t *)node)->undefined);
     ((lib_node_t *)node)->undefined = NULL;
@@ -175,42 +189,46 @@ void *get_undefined_sym(void *arg) {
         // Only interested in .dynsym table.
         continue;
       }
-      for (int y = 0;
-           y < elf_file_descr->elf_sym_tbls[i].elf_sym_tbl_num_entry &&
-           rc == EXIT_SUCCESS;
-           y++) {
-        if (elf_sym_get_string(
-                elf_file_descr, elf_file_descr->elf_sym_tbls[i].is_dynamic,
-                elf_sym_get_st_name(
-                    elf_file_descr,
-                    elf_file_descr->elf_sym_tbls[i].elf_sym_table[y]),
-                &name) == EXIT_SUCCESS) {
+      size_t entry_size = 0;
+      if (elf_file_descr->is_64bit) {
+        entry_size = sizeof(Elf64_Sym);
+      } else {
+        entry_size = sizeof(Elf32_Sym);
+      }
+      iterator_t *iter = iterator_init(
+          (void *)elf_file_descr->elf_sym_tbls[i].elf_sym_table, entry_size,
+          elf_file_descr->elf_sym_tbls[i].elf_sym_tbl_num_entry);
+      void *entry = NULL;
+      entry = iterator_next(iter);
+      while (entry && rc == EXIT_SUCCESS) {
+        if (elf_sym_get_string(elf_file_descr,
+                               elf_file_descr->elf_sym_tbls[i].is_dynamic,
+                               elf_sym_get_st_name(elf_file_descr, entry),
+                               &name) == EXIT_SUCCESS) {
           if (strlen(name) == 0) {
             // If name length is 0 ignoring entry, free it
             if (name) {
               free(name);
               name = NULL;
             }
-            continue;
-          }
-          if (elf_sym_is_global(
-                  elf_file_descr,
-                  elf_file_descr->elf_sym_tbls[i].elf_sym_table[y])) {
-            // Interested only in Global symbols
-            if (!elf_sym_is_defined(
-                    elf_file_descr,
-                    elf_file_descr->elf_sym_tbls[i].elf_sym_table[y])) {
-              // Interested only in Undefined symbols
-              send_sym_to_buffer(ctx->buffer, name);
+          } else {
+            if (elf_sym_is_global(elf_file_descr, entry)) {
+              // Interested only in Global symbols
+              if (!elf_sym_is_defined(elf_file_descr, entry)) {
+                // Interested only in Undefined symbols
+                send_sym_to_buffer(ctx->buffer, name);
+              }
+            }
+            // Sym
+            if (name) {
+              free(name);
+              name = NULL;
             }
           }
-          // Sym
-          if (name) {
-            free(name);
-            name = NULL;
-          }
         }
+        entry = iterator_next(iter);
       }
+      iterator_free(iter);
     }
     if (elf_file_descr) {
       free_elf_file_descr(elf_file_descr);
@@ -231,119 +249,6 @@ void *get_undefined_sym(void *arg) {
   pthread_mutex_unlock(&ctx->buffer->write_mutex);
 
   printf("><SB> %s() has finished, exiting...\n", __func__);
-
-  THREAD_RETURN(rc);
-}
-
-int search_for_lib(mpsc_buffer_t *buffer, char *current_path) {
-  DIR *dir_stream = NULL;
-  struct dirent *dir_entry = NULL;
-  int rc = EXIT_SUCCESS;
-  char lib_suffix[] = {".so"};
-
-  // printf("><SB> %s() started, current directory: %s\n", __func__,
-  //     ctx->buffert_path);
-  if (is_buffer_producer_shutdown_requested(buffer)) {
-    return rc;
-  }
-  if ((dir_stream = opendir(current_path)) == NULL) {
-    rc = errno;
-  }
-  if (rc == EXIT_SUCCESS) {
-    while ((dir_entry = readdir(dir_stream)) != NULL) {
-      if (dir_entry->d_type == 0x04) {
-        if ((strcmp(dir_entry->d_name, ".") == 0) &&
-            (strlen(dir_entry->d_name) == 1)) {
-          continue;
-        } else if ((strcmp(dir_entry->d_name, "..") == 0) &&
-                   (strlen(dir_entry->d_name) == 2)) {
-          continue;
-        } else {
-          // printf("><SB> found directory: %s, entering...\n",
-          // dir_entry->d_name);
-          char *new_current_path = calloc(PATH_MAX, 1);
-          if (!new_current_path) {
-            rc = ENOMEM;
-            return rc;
-          }
-          snprintf((char *)new_current_path, PATH_MAX, "%s/%s", current_path,
-                   dir_entry->d_name);
-          if ((rc = search_for_lib(buffer, new_current_path)) != EXIT_SUCCESS) {
-            return rc;
-          }
-          if (new_current_path) {
-            free(new_current_path);
-            new_current_path = NULL;
-          }
-        }
-      } else {
-        if (strlen(dir_entry->d_name) < 4) {
-          // library name cannot be shorter than 4 bytes "a.so"
-          continue;
-        }
-        if (strcmp(dir_entry->d_name + strlen(dir_entry->d_name) -
-                       strlen(lib_suffix),
-                   lib_suffix) != 0) {
-          continue;
-        }
-        pthread_mutex_lock(&buffer->write_mutex);
-        while (buffer_is_full(buffer) &&
-               !is_buffer_producer_shutdown_requested(buffer)) {
-          pthread_cond_wait(&buffer->not_full, &buffer->write_mutex);
-        }
-        if (is_buffer_producer_shutdown_requested(buffer)) {
-          printf("><SB> Consumer requested to shutdown, exiting...\n");
-          // Producer needs to terminate
-          pthread_mutex_unlock(&buffer->write_mutex);
-          goto cleanup;
-        }
-        buffer->buffer[buffer->tail] = calloc(PATH_MAX, 1);
-
-        snprintf(buffer->buffer[buffer->tail], PATH_MAX, "%s/%s", current_path,
-                 dir_entry->d_name);
-        if (buffer->tail + 1 < MAX_LIB_ENTRY) {
-          buffer->tail++;
-        } else {
-          buffer->tail = 0;
-        }
-        pthread_cond_signal(&buffer->not_empty);
-        pthread_mutex_unlock(&buffer->write_mutex);
-      }
-    }
-  }
-// printf("Complete processing path: %s\n", current_path);
-cleanup:
-  if (dir_stream) {
-    closedir(dir_stream);
-    dir_stream = NULL;
-  }
-  // printf("><SB> %s() finished, with error code: %d\n", __func__, rc);
-
-  return rc;
-}
-
-void *search_for_lib_thread(void *arg) {
-  int rc = EXIT_SUCCESS;
-  producer_thread_ctx_t *ctx = (producer_thread_ctx_t *)arg;
-  thread_user_data_t *data = (thread_user_data_t *)ctx->user_data;
-  // printf("><SB> %s() thread started, current directory: %s\n", __func__,
-  //     ctx->buffert_path);
-
-  printf("><SB> %s() current path: %s\n", __func__, data->lib_path);
-  rc = search_for_lib(ctx->buffer, data->lib_path);
-
-  // Informing that the search for libs has been completed
-  printf("><SB> %s() has been completed\n", __func__);
-  pthread_mutex_lock(&ctx->buffer->write_mutex);
-  atomic_store_explicit(&ctx->buffer->producer_done, true,
-                        memory_order_release);
-  pthread_cond_broadcast(&ctx->buffer->not_empty);
-  pthread_mutex_unlock(&ctx->buffer->write_mutex);
-  printf("><SB> %s() has signaled completion, with error code: %d\n", __func__,
-         rc);
-  if (rc == EXIT_SUCCESS) {
-    rc = EOF;
-  }
 
   THREAD_RETURN(rc);
 }
@@ -492,6 +397,10 @@ static int store_sym(lib_node_t *lib_node, char *name) {
     } else {
       // CLeanup duplicate entry
       if (sym) {
+        if (sym->sym_name) {
+          free(sym->sym_name);
+          sym->sym_name = NULL;
+        }
         free(sym);
         sym = NULL;
       }
@@ -529,20 +438,23 @@ static int store_sym_in_tree(avl_tree_type *tree, char *lib_name, char *name) {
         } else {
           // New lib has been inserted, storing sym
           rc = store_sym(lib, name);
-          // printf(
-          //     "><SB> %s() symbol \"%s\" stored in a new lib name: %s tree
-          //     with " "rc: %s\n",
-          //     __func__, name, lib_name, strerror(rc));
+#ifdef DEBUG
+          printf(
+              "><SB> %s() symbol \"%s\" stored in a new lib name: %s treewith "
+              "rc: %s\n ",
+              __func__, name, lib_name, strerror(rc));
+#endif
         }
       }
     } else {
       // Lib is already in the tree, then just storing sym
       rc = store_sym(debug_node, name);
-      // printf("><SB> %s() symbol \"%s\" stored in an existing lib name: %s
-      // tree "
-      //        "with "
-      //        "rc: %s\n",
-      //        __func__, name, lib_name, strerror(rc));
+#ifdef DEBUG
+      printf("><SB> %s() symbol \"%s\" stored in an existing lib name: %s tree "
+             " with rc: %s\n ",
+             __func__, name, lib_name, strerror(rc));
+#endif
+
       // Free lib object since the one found in the tree was used.
       if (lib) {
         free(lib);
@@ -561,52 +473,56 @@ int get_sym(int fd, sym_cache_t *cache, char *lib_name) {
   char *name = NULL;
   rc = process_elf_file(fd, &elf_file_descr);
   if (rc == EXIT_SUCCESS) {
+#ifdef DEBUG
+    printf("><SB> %s: Caching symbols found in library: %s\n", __func__,
+           lib_name);
+#endif
     for (int i = 0; i < elf_file_descr->elf_sym_tbl_num && rc == EXIT_SUCCESS;
          i++) {
       if (!elf_file_descr->elf_sym_tbls[i].is_dynamic) {
         // Only interested in .dynsym table.
         continue;
       }
-      for (int y = 0;
-           y < elf_file_descr->elf_sym_tbls[i].elf_sym_tbl_num_entry &&
-           rc == EXIT_SUCCESS;
-           y++) {
-        if (ELF_ST_TYPE(elf_sym_get_st_info(
-                elf_file_descr,
-                elf_file_descr->elf_sym_tbls[i].elf_sym_table[y])) !=
-            STT_OBJECT) {
-          continue;
-        }
-        if (elf_sym_get_string(
-                elf_file_descr, elf_file_descr->elf_sym_tbls[i].is_dynamic,
-                elf_sym_get_st_name(
-                    elf_file_descr,
-                    elf_file_descr->elf_sym_tbls[i].elf_sym_table[y]),
-                &name) == EXIT_SUCCESS) {
+      size_t entry_size = 0;
+      if (elf_file_descr->is_64bit) {
+        entry_size = sizeof(Elf64_Sym);
+      } else {
+        entry_size = sizeof(Elf32_Sym);
+      }
+      iterator_t *iter = iterator_init(
+          (void *)elf_file_descr->elf_sym_tbls[i].elf_sym_table, entry_size,
+          elf_file_descr->elf_sym_tbls[i].elf_sym_tbl_num_entry);
+      void *entry = NULL;
+      entry = iterator_next(iter);
+      while (entry && rc == EXIT_SUCCESS) {
+        if (elf_sym_get_string(elf_file_descr,
+                               elf_file_descr->elf_sym_tbls[i].is_dynamic,
+                               elf_sym_get_st_name(elf_file_descr, entry),
+                               &name) == EXIT_SUCCESS) {
           if (strlen(name) == 0) {
             // If name length is 0 ignoring entry, free it
             if (name) {
               free(name);
               name = NULL;
             }
-            continue;
-          }
-          if (elf_sym_is_global(
-                  elf_file_descr,
-                  elf_file_descr->elf_sym_tbls[i].elf_sym_table[y]) &&
-              elf_sym_is_defined(
-                  elf_file_descr,
-                  elf_file_descr->elf_sym_tbls[i].elf_sym_table[y])) {
-            // Interested only in Global and Defined symbols
-            store_sym_in_tree(cache->cache, lib_name, name);
-          }
-          // Freeing name
-          if (name) {
-            free(name);
-            name = NULL;
+          } else {
+            // printf("\t\t-\t %s\n", name);
+            if (!elf_sym_is_local(elf_file_descr, entry) &&
+                elf_sym_is_defined(elf_file_descr, entry)) {
+              // Interested only in Global and Defined symbols
+              store_sym_in_tree(cache->cache, lib_name, name);
+            }
+            // Freeing name
+            if (name) {
+              free(name);
+              name = NULL;
+            }
           }
         }
+        // }
+        entry = iterator_next(iter);
       }
+      iterator_free(iter);
     }
     if (elf_file_descr) {
       free_elf_file_descr(elf_file_descr);
@@ -642,9 +558,10 @@ char *check_sym_cache(sym_cache_t *cache, char *sym) {
   lib_node_t *lib_node = NULL;
   lib_node = (lib_node_t *)avl2_get_first(cache->cache);
   while (lib_node) {
-    //    printf("><SB> %s() found lib %s in the tree.\n", __func__,
-    //           lib_node->lib_name);
-    lib_node = (lib_node_t *)avl2_get_next(cache->cache, &lib_node->node);
+#ifdef DEBUG
+    printf("><SB> %s() found lib %s in the tree.\n", __func__,
+           lib_node->lib_name);
+#endif
     sym_node_t sym_node = {
         .sym_name = sym,
     };
@@ -657,6 +574,7 @@ char *check_sym_cache(sym_cache_t *cache, char *sym) {
         }
       }
     }
+    lib_node = (lib_node_t *)avl2_get_next(cache->cache, &lib_node->node);
   }
   // Symbol is not found in any library, returning NULL
   return NULL;
@@ -733,7 +651,7 @@ void *resolve_undefined_sym(void *arg) {
       pthread_cond_broadcast(&ctx->buffer->not_full);
       pthread_mutex_unlock(&ctx->buffer->write_mutex);
 
-      // printf("><SB> %s() Undefind sym: %s\n", __func__, sym);
+      printf("><SB> %s() Undefind sym: %s\n", __func__, sym);
 
       // Got Undefined symbol, need to check the cache if it has already been
       // found, if it has, record the library name and add this library's
@@ -750,7 +668,9 @@ void *resolve_undefined_sym(void *arg) {
         rc = fetch_library_name(lib_search_producer_ctx->buffer,
                                 lib_search_thread_id, &lib_name);
         if (rc == EXIT_SUCCESS) {
-          printf("><SB> %s() found library: %s\n", __func__, lib_name);
+#ifdef DEBUG
+          printf("><SB> %s() fetched library: %s\n", __func__, lib_name);
+#endif
           rc = populate_cache(cache, lib_name);
           free(lib_name);
           lib_name = NULL;
