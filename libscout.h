@@ -1,10 +1,11 @@
 #pragma once
 
-#include "avl/avl_tree.h"
 #include <limits.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+
+#include "avl/avl_tree.h"
 
 #define THREAD_RETURN(rc) return (void *)(long)rc
 #define MAX_LIB_ENTRY 2
@@ -65,8 +66,9 @@ typedef struct main_thread_ctx_ {
 } main_thread_ctx_t;
 
 typedef struct thread_user_data_ {
-  int fd;
+  char *file_name;
   char *lib_path;
+  sym_cache_t *cache;
 } thread_user_data_t;
 
 void *get_undefined_sym(void *arg);
@@ -76,7 +78,7 @@ int create_producer_thread_ctx(producer_thread_ctx_t **ctx);
 
 void destroy_producer_thread_ctx(producer_thread_ctx_t *ctx);
 
-void *search_for_lib_thread(void *arg);
+int search_for_lib(char *lib_path, sym_cache_t *cache);
 
 bool buffer_is_empty(mpsc_buffer_t *b);
 
@@ -85,3 +87,18 @@ bool buffer_is_full(mpsc_buffer_t *b);
 bool is_buffer_producer_done(mpsc_buffer_t *buffer);
 
 bool is_buffer_producer_shutdown_requested(mpsc_buffer_t *buffer);
+
+void destroy_sym_node(avl2_node_type *node, avl_tree_type *lib_node);
+
+void destroy_cache_node(avl2_node_type *node, avl_tree_type *lib_node);
+
+int populate_cache(sym_cache_t *cache, char *lib_name);
+
+char *check_sym_cache(sym_cache_t *cache, char *sym);
+
+int sym_name_compare(struct avl2_node_type_ *n1, struct avl2_node_type_ *n2);
+
+int lib_name_compare(struct avl2_node_type_ *n1, struct avl2_node_type_ *n2);
+
+int init_tree(avl_tree_type **tree, avl2_compare_type avl_compare,
+              avl_option_type avl_option);

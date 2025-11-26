@@ -11,6 +11,7 @@ cc_binary(
         "libscout.h",
         "main.c",
         "search_for_lib.c",
+        "sym_cache.c",
     ],
     copts = [
         "--std=c23",

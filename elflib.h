@@ -46,7 +46,6 @@ typedef struct elf_str_tbl_ {
 } elf_str_tbl_t;
 
 typedef struct elf_file_ {
-  int fd;
   bool is_64bit;
   uint32_t file_type;
   elf_hdr_u_t *elf_hdr;
@@ -61,7 +60,7 @@ typedef struct elf_file_ {
 
 int prepare_open_core_file(char *org_core_file, int *core_file_hd);
 
-int process_elf_file(int elf_file_dscr, elf_file_descr_t **elf_file_p);
+int process_elf_file(char *file_name, elf_file_descr_t **elf_file_p);
 
 void free_elf_file_descr(elf_file_descr_t *elf_file_descr);
 

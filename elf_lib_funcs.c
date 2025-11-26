@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <elf.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -372,7 +373,7 @@ int elf_sym_get_st_info(elf_file_descr_t *elf_file_descr,
   }
 }
 
-static int get_elf_sec_data(elf_file_descr_t *elf_file_descr, int indx,
+static int get_elf_sec_data(int fd, elf_file_descr_t *elf_file_descr, int indx,
                             void *data) {
   int rc = EXIT_SUCCESS;
   int offset = 0;
@@ -389,13 +390,13 @@ static int get_elf_sec_data(elf_file_descr_t *elf_file_descr, int indx,
     }
   }
   if (rc == EXIT_SUCCESS) {
-    if ((lseek(elf_file_descr->fd, offset, SEEK_SET)) == -1) {
+    if ((lseek(fd, offset, SEEK_SET)) == -1) {
       rc = errno;
     }
   }
   if (rc == EXIT_SUCCESS) {
     int n = 0;
-    if ((n = read(elf_file_descr->fd, data, size)) == -1) {
+    if ((n = read(fd, data, size)) == -1) {
       rc = errno;
     }
   }
@@ -403,31 +404,20 @@ static int get_elf_sec_data(elf_file_descr_t *elf_file_descr, int indx,
   return rc;
 }
 
-static int get_elf_pg_data(elf_file_descr_t *elf_file_descr, int indx,
-                           void **data) {
+static int get_elf_pg_data(int fd, elf_file_descr_t *elf_file_descr, int size,
+                           int offset, void *data) {
   int rc = EXIT_SUCCESS;
-  int offset = 0;
-  int size = 0;
-  if ((data == NULL) || (*data == NULL) ||
-      (indx > get_elf_hdr_phnum(elf_file_descr))) {
+  if (!data) {
     rc = EINVAL;
   }
   if (rc == EXIT_SUCCESS) {
-    offset = get_elf_pg_offset(elf_file_descr, indx);
-    size = get_elf_pg_size(elf_file_descr, indx);
-    if (offset <= 0 || size <= 0) {
-      // No data, there is nothing to do.
-      return EXIT_SUCCESS;
-    }
-  }
-  if (rc == EXIT_SUCCESS) {
-    if ((lseek(elf_file_descr->fd, offset, SEEK_SET)) == -1) {
+    if ((lseek(fd, offset, SEEK_SET)) == -1) {
       rc = errno;
     }
   }
   if (rc == EXIT_SUCCESS) {
     int n = 0;
-    if ((n = read(elf_file_descr->fd, *data, size)) == -1) {
+    if ((n = read(fd, data, size)) == -1) {
       rc = errno;
     }
   }
@@ -517,8 +507,8 @@ static int get_elf_sec_name(elf_file_descr_t *file_p, int indx, char **name) {
   return rc;
 }
 
-static int elf_populate_str_table(elf_file_descr_t *file_p, int sec_indx,
-                                  int tbl_indx) {
+static int elf_populate_str_table(int fd, elf_file_descr_t *file_p,
+                                  int sec_indx, int tbl_indx) {
   int rc = EXIT_SUCCESS;
 
   file_p->elf_str_tbls[tbl_indx].elf_str_table =
@@ -527,7 +517,7 @@ static int elf_populate_str_table(elf_file_descr_t *file_p, int sec_indx,
     rc = ENOMEM;
   }
   if (rc == EXIT_SUCCESS) {
-    rc = get_elf_sec_data(file_p, sec_indx,
+    rc = get_elf_sec_data(fd, file_p, sec_indx,
                           (void *)file_p->elf_str_tbls[tbl_indx].elf_str_table);
   }
   if (rc == EXIT_SUCCESS) {
@@ -551,8 +541,8 @@ static int elf_populate_str_table(elf_file_descr_t *file_p, int sec_indx,
   return rc;
 }
 
-static int elf_populate_sym_table(elf_file_descr_t *file_p, int sec_indx,
-                                  int tbl_indx) {
+static int elf_populate_sym_table(int fd, elf_file_descr_t *file_p,
+                                  int sec_indx, int tbl_indx) {
   int rc = EXIT_SUCCESS;
 
   int sec_size = get_elf_sec_size(file_p, sec_indx);
@@ -566,7 +556,7 @@ static int elf_populate_sym_table(elf_file_descr_t *file_p, int sec_indx,
          (void *)file_p->elf_sym_tbls[tbl_indx].elf_sym_table);
 #endif
   if (rc == EXIT_SUCCESS) {
-    rc = get_elf_sec_data(file_p, sec_indx,
+    rc = get_elf_sec_data(fd, file_p, sec_indx,
                           (void *)file_p->elf_sym_tbls[tbl_indx].elf_sym_table);
   }
   if (rc == EXIT_SUCCESS) {
@@ -805,14 +795,23 @@ static int process_nt_file(bool is_64bit, char *data, int size) {
   return rc;
 }
 
-static int process_elf_pg_hdr_pt_note(elf_file_descr_t *file_p, int indx) {
+static int process_elf_pg_hdr_pt_note(int fd, elf_file_descr_t *file_p,
+                                      void *pg_header) {
   int rc = EXIT_SUCCESS;
   char *data = NULL;
 
-  if (!file_p) {
+  if (!file_p || !pg_header) {
     return EINVAL;
   }
-  int size = get_elf_pg_size(file_p, indx);
+  int size = 0;
+  int data_offset = 0;
+  if (file_p->is_64bit) {
+    size = ((Elf64_Phdr *)(pg_header))->p_filesz;
+    data_offset = ((Elf64_Phdr *)(pg_header))->p_offset;
+  } else {
+    size = ((Elf32_Phdr *)(pg_header))->p_filesz;
+    data_offset = ((Elf32_Phdr *)(pg_header))->p_offset;
+  }
   if (size == 0) {
     // There is no PT_NOTE, nothing to do
     return rc;
@@ -821,42 +820,39 @@ static int process_elf_pg_hdr_pt_note(elf_file_descr_t *file_p, int indx) {
   if (!data) {
     return ENOMEM;
   }
-  rc = get_elf_pg_data(file_p, indx, (void **)&data);
-  int i = 0;
-  Elf64_Word name_sz = 0;
-  Elf64_Word descr_sz = 0;
-  Elf64_Word type = 0;
-  Elf64_Word field_sz = 0;
-  if (file_p->is_64bit) {
-    field_sz = sizeof(Elf64_Word);
-  } else {
-    field_sz = sizeof(Elf32_Word);
-  }
+  rc = get_elf_pg_data(fd, file_p, size, data_offset, (void *)data);
   if (rc == EXIT_SUCCESS) {
-    while (i < size && rc == EXIT_SUCCESS) {
+    Elf32_Word name_sz = 0;
+    Elf32_Word descr_sz = 0;
+    Elf32_Word type = 0;
+    Elf32_Word offset = 0;
+    while ((offset + 12) < size && rc == EXIT_SUCCESS) {
       char *name = NULL;
       char *descr = NULL;
-      memcpy(&name_sz, (char *)(data + i), field_sz);
-      memcpy(&descr_sz, (char *)(data + i + field_sz), field_sz);
-      memcpy(&type, (char *)(data + i + (field_sz * 2)), field_sz);
-      name = malloc(name_sz);
-      if (!name) {
-        rc = ENOMEM;
-        continue;
+      memcpy(&name_sz, (char *)(data + offset), 4);
+      offset += 4;
+      memcpy(&descr_sz, (char *)(data + offset), 4);
+      offset += 4;
+      memcpy(&type, (char *)(data + offset), 4);
+      offset += 4;
+      if (name_sz > 0) {
+        name = malloc(name_sz);
+        if (!name) {
+          rc = ENOMEM;
+          continue;
+        }
+        memcpy(name, (char *)(data + offset), name_sz);
+        offset += (name_sz + 3) & ~3;
       }
-      descr = malloc(descr_sz);
-      if (!descr) {
-        rc = ENOMEM;
-        continue;
+      if (descr_sz > 0) {
+        descr = malloc(descr_sz);
+        if (!descr) {
+          rc = ENOMEM;
+          continue;
+        }
+        memcpy(descr, (char *)(data + offset), descr_sz);
+        offset += (descr_sz + 3) & ~3;
       }
-      // printf("\ttype\t: %u\n", type);
-      memcpy(name, (char *)(data + i + (field_sz * 3)), name_sz);
-      // printf("\tname\t: %s\tsize\t :%u\n", (name_sz == 0) ? "NULL" : name,
-      // name_sz);
-      name_sz +=
-          (name_sz % field_sz == 0) ? 0 : (field_sz - name_sz % field_sz);
-      memcpy(descr, (char *)(data + i + (field_sz * 3) + name_sz), descr_sz);
-      // printf("\tdescription size\t :%u\n", descr_sz);
       switch (type) {
       case NT_AUXV:
         Elf64_Addr at_base = 0;
@@ -877,19 +873,6 @@ static int process_elf_pg_hdr_pt_note(elf_file_descr_t *file_p, int indx) {
 #endif
         process_nt_file(file_p->is_64bit, descr, descr_sz);
       }
-      // for (int i = 0; i < descr_sz; i++) {
-      //   if (((char)descr[i] >= 0x20 && (char)descr[i] <= 0x7e)) {
-      //     printf("%c", (char)descr[i]);
-      //   } else {
-      //     printf("_0x%x_", (unsigned char)descr[i]);
-      //   }
-      // }
-      // if (descr_sz != 0) {
-      //   printf("\n");
-      // }
-      descr_sz +=
-          (descr_sz % field_sz == 0) ? 0 : (field_sz - descr_sz % field_sz);
-      i += ((field_sz * 3) + name_sz + descr_sz);
       if (name) {
         free(name);
       }
@@ -899,16 +882,15 @@ static int process_elf_pg_hdr_pt_note(elf_file_descr_t *file_p, int indx) {
     }
   }
 
-  //  if (rc != EXIT_SUCCESS) {
   if (data) {
     free(data);
     data = NULL;
   }
-  //  }
+
   return rc;
 }
 
-static int populate_string_table(elf_file_descr_t *file_p, int indx) {
+static int populate_string_table(int fd, elf_file_descr_t *file_p, int indx) {
   int rc = EXIT_SUCCESS;
   elf_str_tbl_t *elf_str_tbl = NULL;
   if (!file_p->elf_str_tbls) {
@@ -927,7 +909,7 @@ static int populate_string_table(elf_file_descr_t *file_p, int indx) {
     }
   }
   if (rc == EXIT_SUCCESS) {
-    rc = elf_populate_str_table(file_p, indx, file_p->elf_str_tbl_num);
+    rc = elf_populate_str_table(fd, file_p, indx, file_p->elf_str_tbl_num);
     if (rc == EXIT_SUCCESS) {
       file_p->elf_str_tbl_num++;
     }
@@ -936,7 +918,7 @@ static int populate_string_table(elf_file_descr_t *file_p, int indx) {
   return rc;
 }
 
-static int populate_sym_table(elf_file_descr_t *file_p, int indx) {
+static int populate_sym_table(int fd, elf_file_descr_t *file_p, int indx) {
   int rc = EXIT_SUCCESS;
   elf_sym_tbl_t *elf_sym_tbl = NULL;
 
@@ -956,7 +938,7 @@ static int populate_sym_table(elf_file_descr_t *file_p, int indx) {
     }
   }
   if (rc == EXIT_SUCCESS) {
-    rc = elf_populate_sym_table(file_p, indx, file_p->elf_sym_tbl_num);
+    rc = elf_populate_sym_table(fd, file_p, indx, file_p->elf_sym_tbl_num);
     if (rc == EXIT_SUCCESS) {
       file_p->elf_sym_tbl_num++;
     }
@@ -1028,19 +1010,26 @@ int print_sym_table(elf_file_descr_t *file_p) {
   return rc;
 }
 
-int process_elf_file(int fd, elf_file_descr_t **elf_file_descr) {
+int process_elf_file(char *fn, elf_file_descr_t **elf_file_descr) {
   int rc = EXIT_SUCCESS;
   elf_file_descr_t *file_p = NULL;
+  int fd = -1;
 
-  if ((fd == -1) || (elf_file_descr == NULL)) {
+  if ((fn == NULL) || (elf_file_descr == NULL)) {
     return EINVAL;
+  }
+  if (rc == EXIT_SUCCESS) {
+    fd = open(fn, O_RDONLY);
+    if (fd < 0) {
+      rc = errno;
+      fprintf(stderr, "failed tp open executable file %s with error: %s\n", fn,
+              strerror(rc));
+    }
   }
   if (rc == EXIT_SUCCESS) {
     file_p = calloc(1, sizeof(elf_file_descr_t));
     if (!file_p) {
       rc = ENOMEM;
-    } else {
-      file_p->fd = fd;
     }
   }
   if (rc == EXIT_SUCCESS) {
@@ -1058,18 +1047,24 @@ int process_elf_file(int fd, elf_file_descr_t **elf_file_descr) {
   if (rc == EXIT_SUCCESS) {
     // Check if it is a valid ELF file
     if (memcmp(file_p->elf_hdr->elf_64_hdr.e_ident, ELFMAG, SELFMAG) != 0) {
+      fprintf(stderr, "><SB> %s(): file %s is not a valid ELF file\n", __func__,
+              fn);
       rc = EINVAL;
     }
   }
   if (rc == EXIT_SUCCESS) {
     if (file_p->elf_hdr->elf_64_hdr.e_ident[EI_DATA] != ELFDATA2LSB &&
         file_p->elf_hdr->elf_64_hdr.e_ident[EI_DATA] != ELFDATA2MSB) {
+      fprintf(stderr, "><SB> %s(): file %s is not a valid ELF file\n", __func__,
+              fn);
       rc = EINVAL;
     }
   }
   if (rc == EXIT_SUCCESS) {
     if (file_p->elf_hdr->elf_64_hdr.e_ident[EI_CLASS] != ELFCLASS64 &&
         file_p->elf_hdr->elf_32_hdr.e_ident[EI_CLASS] != ELFCLASS32) {
+      fprintf(stderr, "><SB> %s(): file %s is not a valid ELF file\n", __func__,
+              fn);
       rc = EINVAL;
     }
   }
@@ -1078,38 +1073,54 @@ int process_elf_file(int fd, elf_file_descr_t **elf_file_descr) {
       file_p->is_64bit = true;
     }
     // Processing program headers if offset is not 0
+    printf("><SB> %s(): Start of a program header table: 0x%02x\n", __func__,
+           get_elf_hdr_phoff(file_p));
+    printf("><SB> %s(): Size of a program header table entry: 0x%02x\n",
+           __func__, get_elf_hdr_phentsize(file_p));
     if (get_elf_hdr_phoff(file_p) > 0) {
       file_p->elf_pg_hdr =
-          calloc(get_elf_hdr_phnum(file_p), sizeof(elf_pg_hdr_u_t));
+          calloc(get_elf_hdr_phnum(file_p), get_elf_hdr_phentsize(file_p));
       if (!file_p->elf_pg_hdr) {
         rc = ENOMEM;
       }
       if (rc == EXIT_SUCCESS) {
-        if ((lseek(file_p->fd, get_elf_hdr_phoff(file_p), SEEK_SET)) == -1) {
+        if ((lseek(fd, get_elf_hdr_phoff(file_p), SEEK_SET)) == -1) {
           rc = errno;
         }
       }
       if (rc == EXIT_SUCCESS) {
-        for (int i = 0; i < get_elf_hdr_phnum(file_p) && rc == EXIT_SUCCESS;
-             i++) {
-          if ((read(file_p->fd, &file_p->elf_pg_hdr[i],
-                    get_elf_hdr_phentsize(file_p))) == -1) {
+        void *entry = NULL;
+        iterator_t *iter =
+            iterator_init(file_p->elf_pg_hdr, get_elf_hdr_phentsize(file_p),
+                          get_elf_hdr_phnum(file_p));
+        entry = iterator_next(iter);
+        while (entry && rc == EXIT_SUCCESS) {
+          if ((read(fd, entry, get_elf_hdr_phentsize(file_p))) == -1) {
             rc = errno;
           }
+          entry = iterator_next(iter);
         }
+        iterator_free(iter);
       }
       if (rc == EXIT_SUCCESS) {
-        for (int i = 0; i < get_elf_hdr_phnum(file_p) && rc == EXIT_SUCCESS;
-             i++) {
-          // both 32bit and 64bit program header start with p_type
-          // at the same position and of the same length, it is safe
-          // to use 64bit in both cases.
-          switch (file_p->elf_pg_hdr[i].elf_64_pg_hdr.p_type) {
+        void *entry = NULL;
+        int type = 0;
+        iterator_t *iter =
+            iterator_init(file_p->elf_pg_hdr, get_elf_hdr_phentsize(file_p),
+                          get_elf_hdr_phnum(file_p));
+        entry = iterator_next(iter);
+        while (entry && rc == EXIT_SUCCESS) {
+          if (file_p->is_64bit) {
+            type = ((Elf64_Phdr *)(entry))->p_type;
+          } else {
+            type = ((Elf32_Phdr *)(entry))->p_type;
+          }
+          switch (type) {
           case PT_NOTE:
 #ifdef DEBUG
             printf("Found PT_NOTE, processing...\n");
 #endif
-            rc = process_elf_pg_hdr_pt_note(file_p, i);
+            rc = process_elf_pg_hdr_pt_note(fd, file_p, entry);
             break;
           case PT_LOAD:
 #ifdef DEBUG
@@ -1141,8 +1152,15 @@ int process_elf_file(int fd, elf_file_descr_t **elf_file_descr) {
             printf("Found PT_TLS, processing...\n");
 #endif
             break;
+          case PT_GNU_EH_FRAME:
+#ifdef DEBUG
+            printf("Found PT_GNU_EH_FRAME, processing...\n");
+#endif
+            break;
           }
+          entry = iterator_next(iter);
         }
+        iterator_free(iter);
       }
     }
   }
@@ -1155,14 +1173,14 @@ int process_elf_file(int fd, elf_file_descr_t **elf_file_descr) {
       rc = ENOMEM;
     }
     if (rc == EXIT_SUCCESS) {
-      if ((lseek(file_p->fd, get_elf_hdr_shoff(file_p), SEEK_SET)) == -1) {
+      if ((lseek(fd, get_elf_hdr_shoff(file_p), SEEK_SET)) == -1) {
         rc = errno;
       }
     }
     if (rc == EXIT_SUCCESS) {
       for (int i = 0; i < get_elf_hdr_shnum(file_p) && rc == EXIT_SUCCESS;
            i++) {
-        if ((read(file_p->fd, &file_p->elf_sec_hdr[i].elf_sec_hdr_raw,
+        if ((read(fd, &file_p->elf_sec_hdr[i].elf_sec_hdr_raw,
                   get_elf_hdr_shentsize(file_p))) == -1) {
           rc = errno;
         }
@@ -1177,7 +1195,8 @@ int process_elf_file(int fd, elf_file_descr_t **elf_file_descr) {
         }
       }
       if (rc == EXIT_SUCCESS) {
-        rc = elf_populate_str_table(file_p, get_elf_sec_hdr_strndx(file_p), 0);
+        rc = elf_populate_str_table(fd, file_p, get_elf_sec_hdr_strndx(file_p),
+                                    0);
       }
       if (rc == EXIT_SUCCESS) {
         file_p->elf_str_tbl_num++;
@@ -1193,13 +1212,13 @@ int process_elf_file(int fd, elf_file_descr_t **elf_file_descr) {
 #ifdef DEBUG
             printf("SHT_SYMTAB\n");
 #endif
-            rc = populate_sym_table(file_p, i);
+            rc = populate_sym_table(fd, file_p, i);
             break;
           case SHT_DYNSYM:
 #ifdef DEBUG
             printf("SHT_DYNSYM\n");
 #endif
-            rc = populate_sym_table(file_p, i);
+            rc = populate_sym_table(fd, file_p, i);
             break;
           case SHT_STRTAB:
 #ifdef DEBUG
@@ -1209,7 +1228,7 @@ int process_elf_file(int fd, elf_file_descr_t **elf_file_descr) {
               // Section Header String table has alreade been processed
               continue;
             }
-            rc = populate_string_table(file_p, i);
+            rc = populate_string_table(fd, file_p, i);
             break;
           case SHT_RELA:
 #ifdef DEBUG
@@ -1245,6 +1264,10 @@ int process_elf_file(int fd, elf_file_descr_t **elf_file_descr) {
         }
       }
     }
+  }
+  if (fd != -1) {
+    close(fd);
+    fd = -1;
   }
   if (rc != EXIT_SUCCESS) {
     free_elf_file_descr(file_p);

@@ -13,69 +13,85 @@
 #include "elflib.h"
 #include "libscout.h"
 
-void *main_thread(void *arg) {
+int main_thread(char *fn, char *lib_path) {
   int rc = EXIT_SUCCESS;
-  main_thread_ctx_t *ctx = (main_thread_ctx_t *)arg;
-  int exec_fd = -1;
-
-  thread_user_data_t *thread_user_data = malloc(sizeof(thread_user_data_t));
-  if (!thread_user_data) {
-    rc = ENOMEM;
-    THREAD_RETURN(rc);
-  }
-  thread_user_data->lib_path = calloc(strlen(ctx->lib_path) + 1, 1);
-  if (!thread_user_data->lib_path) {
-    rc = ENOMEM;
-    THREAD_RETURN(rc);
-  }
-  exec_fd = open(ctx->exe_file_name, O_RDONLY);
-  if (exec_fd < 0) {
-    rc = errno;
-    fprintf(stderr, "failed tp open executable file %s with error: %s\n",
-            ctx->exe_file_name, strerror(rc));
-    THREAD_RETURN(rc);
-  }
-
-  producer_thread_ctx_t *und_sym_producer_ctx = NULL;
-  thread_user_data->fd = exec_fd;
-  strncpy(thread_user_data->lib_path, ctx->lib_path, strlen(ctx->lib_path));
-
-  rc = create_producer_thread_ctx(&und_sym_producer_ctx);
-  if (rc != EXIT_SUCCESS) {
-    THREAD_RETURN(rc);
-  }
-  und_sym_producer_ctx->user_data = (void *)thread_user_data;
-
-  pthread_t producer_thread_id;
+  sym_cache_t *cache = NULL;
+  thread_user_data_t *thread_user_data = NULL;
+  producer_thread_ctx_t *sym_producer_ctx = NULL;
   pthread_t consumer_thread_id;
-  void *producer_thread_rc;
   void *consumer_thread_rc;
 
-  pthread_create(&producer_thread_id, NULL, get_undefined_sym,
-                 und_sym_producer_ctx);
-
-  pthread_create(&consumer_thread_id, NULL, resolve_undefined_sym,
-                 und_sym_producer_ctx);
-
-  pthread_join(producer_thread_id, &producer_thread_rc);
-  rc = (int)(long)producer_thread_rc;
-  if (rc != EXIT_SUCCESS) {
-    printf("><SB> _%s() get_undefined_sym finished with rc: %s\n", __func__,
-           strerror(rc));
-    close(exec_fd);
-    THREAD_RETURN(rc);
+  // Initialization of the sym cache
+  cache = malloc(sizeof(sym_cache_t));
+  if (!cache) {
+    return ENOMEM;
   }
-  pthread_join(consumer_thread_id, &consumer_thread_rc);
-  rc = (int)(long)consumer_thread_rc;
-  printf("><SB> _%s() resolve_undefined_sym finished with rc: %s\n", __func__,
-         strerror(rc));
+  rc = init_tree(&cache->cache, lib_name_compare, AVL_OPTION_DEFAULT);
+  if (rc == EXIT_SUCCESS) {
+    // Starting searching for libs and populating sym cache
+    rc = search_for_lib(lib_path, cache);
+  }
+  if (rc == EXIT_SUCCESS) {
+    // Libraries' sym cache is ready, can start Undefined Symbols resolving
+    // thread.
+    thread_user_data = calloc(sizeof(thread_user_data_t), 1);
+    if (!thread_user_data) {
+      rc = ENOMEM;
+    }
+  }
+  if (rc == EXIT_SUCCESS) {
+    thread_user_data->file_name = calloc(strlen(fn) + 1, 1);
+    if (!thread_user_data->file_name) {
+      rc = ENOMEM;
+    }
+  }
+  if (rc == EXIT_SUCCESS) {
+    thread_user_data->lib_path = calloc(strlen(lib_path) + 1, 1);
+    if (!thread_user_data->lib_path) {
+      rc = ENOMEM;
+    }
+  }
+  if (rc == EXIT_SUCCESS) {
+    strncpy(thread_user_data->file_name, fn, strlen(fn));
+    strncpy(thread_user_data->lib_path, lib_path, strlen(lib_path));
+    thread_user_data->cache = cache;
+    rc = create_producer_thread_ctx(&sym_producer_ctx);
+  }
+  if (rc == EXIT_SUCCESS) {
+    sym_producer_ctx->user_data = (void *)thread_user_data;
 
-  free(thread_user_data->lib_path);
-  thread_user_data->lib_path = NULL;
-  close(exec_fd);
-  destroy_producer_thread_ctx(und_sym_producer_ctx);
+    pthread_create(&consumer_thread_id, NULL, resolve_undefined_sym,
+                   sym_producer_ctx);
 
-  THREAD_RETURN(rc);
+    pthread_join(consumer_thread_id, &consumer_thread_rc);
+    rc = (int)(long)consumer_thread_rc;
+    printf("><SB> _%s() resolve_undefined_sym finished with rc: %s\n", __func__,
+           strerror(rc));
+  }
+  if (thread_user_data) {
+    if (thread_user_data->lib_path) {
+      free(thread_user_data->lib_path);
+      thread_user_data->lib_path = NULL;
+    }
+    if (thread_user_data->file_name) {
+      free(thread_user_data->file_name);
+      thread_user_data->file_name = NULL;
+    }
+  }
+
+  destroy_producer_thread_ctx(sym_producer_ctx);
+
+  if (cache) {
+    if (cache->cache) {
+      avl2_destroy(cache->cache, destroy_cache_node);
+      free(cache->cache);
+      cache->cache = NULL;
+    }
+    free(cache);
+    cache = NULL;
+  }
+
+  return rc;
 }
 
 int main(int argc, char *argv[]) {
@@ -116,15 +132,9 @@ int main(int argc, char *argv[]) {
   fprintf(stdout, "><SB> executable file: %s\n", exec_file);
   fprintf(stdout, "><SB> lib path: %s\n", lib_path);
 
-  pthread_t main_thread_id;
-  void *main_thread_rc;
-  main_thread_ctx_t main_thread_ctx = {
-      .exe_file_name = exec_file,
-      .lib_path = lib_path,
-  };
-  pthread_create(&main_thread_id, NULL, main_thread, &main_thread_ctx);
-  pthread_join(main_thread_id, &main_thread_rc);
-  rc = (int)(long)main_thread_rc;
+  rc = main_thread(exec_file, lib_path);
+  printf("><SB> %s(): main thread finished with error code: %s\n", __func__,
+         strerror(rc));
 
   return rc;
 }
