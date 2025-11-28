@@ -8,7 +8,8 @@
 #include "avl/avl_tree.h"
 
 #define THREAD_RETURN(rc) return (void *)(long)rc
-#define MAX_LIB_ENTRY 2
+#define MAX_LIB_ENTRY 1024
+#define INITIAL_PRODUCER_ARRAY_SIZE 100
 
 typedef struct sym_node_ {
   avl2_node_type node;

@@ -104,9 +104,10 @@ void *get_undefined_sym(void *arg) {
   char *name = NULL;
   producer_thread_ctx_t *ctx = (producer_thread_ctx_t *)arg;
   thread_user_data_t *data = (thread_user_data_t *)ctx->user_data;
-
+#ifdef DEBUG
   printf("><SB> %s() producer thread for file: %s ctx at: %p started\n",
          __func__, data->file_name, (void *)ctx);
+#endif
   rc = process_elf_file(data->file_name, &elf_file_descr);
   if (rc == EXIT_SUCCESS) {
     for (int i = 0; i < elf_file_descr->elf_sym_tbl_num && rc == EXIT_SUCCESS;
@@ -161,16 +162,17 @@ void *get_undefined_sym(void *arg) {
       elf_file_descr = NULL;
     }
   }
-
+#ifdef DEBUG
   printf("><SB> %s() producer thread for file: %s ctx at: %p finished\n",
          __func__, data->file_name, (void *)ctx);
+#endif
 
   pthread_mutex_lock(&ctx->buffer->write_mutex);
   ctx->buffer->producer_count--;
   if (ctx->buffer->producer_count <= 0) {
-    printf("><SB> %s() Last producer, sending termination signal.\n", __func__);
-    // Sending broadcast to the consumer only if no more producers left,
-    // otherwise just decrement the producer counter and return.
+    // printf("><SB> %s() Last producer, sending termination signal.\n",
+    // __func__); Sending broadcast to the consumer only if no more producers
+    // left, otherwise just decrement the producer counter and return.
     atomic_store_explicit(&ctx->buffer->producer_done, true,
                           memory_order_release);
     pthread_cond_broadcast(&ctx->buffer->not_empty);
@@ -313,6 +315,31 @@ typedef struct producer_thread_info_ {
   void *rc;
 } producer_thread_info_t;
 
+int add_sym_to_tree(avl_tree_type *tree, char *sym_name) {
+  int rc = EXIT_SUCCESS;
+
+  sym_node_t sym_node = {
+      .sym_name = sym_name,
+  };
+  sym_node_t *dummy_node = (sym_node_t *)avl2_search(tree, &sym_node.node);
+  if (!dummy_node) {
+    dummy_node = malloc(sizeof(sym_node_t));
+    if (!dummy_node) {
+      rc = ENOMEM;
+    }
+    if (rc == EXIT_SUCCESS) {
+      dummy_node->sym_name = sym_name;
+      if (avl2_insert(tree, &dummy_node->node) == NULL) {
+        rc = EBADMSG;
+      }
+    }
+  } else {
+    rc = EEXIST;
+  }
+
+  return rc;
+}
+
 // resolve_undefined_sym receives three parameters from the context,
 // buffer to receive undefined symbols, executable file name and already
 // populated cache of symbols.
@@ -323,8 +350,9 @@ void *resolve_undefined_sym(void *arg) {
   sym_cache_t *cache = NULL;
   producer_thread_info_t *producer_thread_arr = NULL;
   int number_of_producers = 0;
-  int producer_arr_size = 1;
+  int producer_arr_size = INITIAL_PRODUCER_ARRAY_SIZE;
   avl_tree_type *dependency = NULL;
+  avl_tree_type *undefined_sym = NULL;
 
   if (!data) {
     rc = EINVAL;
@@ -343,6 +371,10 @@ void *resolve_undefined_sym(void *arg) {
   cache = data->cache;
 
   rc = init_tree(&dependency, sym_name_compare, AVL_OPTION_DEFAULT);
+  if (rc != EXIT_SUCCESS) {
+    goto cleanup;
+  }
+  rc = init_tree(&undefined_sym, sym_name_compare, AVL_OPTION_DEFAULT);
   if (rc != EXIT_SUCCESS) {
     goto cleanup;
   }
@@ -389,61 +421,57 @@ void *resolve_undefined_sym(void *arg) {
       // resolution.
       char *dep_lib_name = NULL;
       if ((dep_lib_name = check_sym_cache(cache, sym)) != NULL) {
-        printf("><SB> %s(): Symbol: %s is resolved in %s\n", __func__, sym,
-               dep_lib_name);
+        // printf("><SB> %s(): Symbol: %s is resolved in %s\n", __func__, sym,
+        //       dep_lib_name);
         // Symbol is found in the cache
         // printf("><SB> %s() >>>>>>> Found dependency lib: %s\n", __func__,
         //        dep_lib_name);
         // Check if this library has already been added to the dependency tree
-        sym_node_t search_lib = {
-            .sym_name = dep_lib_name,
-        };
-        sym_node_t *dependency_lib =
-            (sym_node_t *)avl2_search(dependency, &search_lib.node);
-        if (!dependency_lib) {
-          dependency_lib = malloc(sizeof(sym_node_t));
-          if (!dependency_lib) {
-            rc = ENOMEM;
+        rc = add_sym_to_tree(dependency, dep_lib_name);
+        if (rc == EXIT_SUCCESS) {
+          // Adding library's Undefined symbols for further processing
+          if (number_of_producers + 1 >= producer_arr_size) {
+            // Need to increase size of producer_thread_arr
+            producer_thread_info_t *t =
+                realloc(producer_thread_arr, sizeof(producer_thread_info_t) *
+                                                 (producer_arr_size + 1) * 2);
+            if (!t) {
+              rc = ENOMEM;
+            } else {
+              producer_arr_size = (producer_arr_size + 1) * 2;
+              producer_thread_arr = t;
+            }
           }
           if (rc == EXIT_SUCCESS) {
-            dependency_lib->sym_name = dep_lib_name;
-            if (avl2_insert(dependency, &dependency_lib->node) == NULL) {
-              rc = EBADMSG;
-            }
+            rc =
+                process_file_sym(dep_lib_name, dep_lib_name, ctx,
+                                 &producer_thread_arr[number_of_producers].tid);
             if (rc == EXIT_SUCCESS) {
-              // Adding library's Undefined symbols for further processing
-              if (number_of_producers + 1 >= producer_arr_size) {
-                // Need to increase size of producer_thread_arr
-                producer_thread_info_t *t = realloc(
-                    producer_thread_arr, sizeof(producer_thread_info_t) *
-                                             (producer_arr_size + 1) * 2);
-                if (!t) {
-                  rc = ENOMEM;
-                } else {
-                  producer_arr_size = (producer_arr_size + 1) * 2;
-                  producer_thread_arr = t;
-                }
-              }
-              if (rc == EXIT_SUCCESS) {
-                rc = process_file_sym(
-                    dep_lib_name, dep_lib_name, ctx,
-                    &producer_thread_arr[number_of_producers].tid);
-                if (rc == EXIT_SUCCESS) {
-                  number_of_producers++;
-                  // printf("><SB> %s() successfully added producer library %s "
-                  //        "Undefined symbols\n ",
-                  //        __func__, dep_lib_name);
-                }
-              }
+              number_of_producers++;
+              // printf("><SB> %s() successfully added producer library %s "
+              //        "Undefined symbols\n ",
+              //        __func__, dep_lib_name);
             }
           }
+        } else if (rc == EEXIST) {
+          // Library is already in the tree, ignoring
+          rc = EXIT_SUCCESS;
         }
+        free(sym);
+        sym = NULL;
       } else {
-        printf("><SB> %s(): Symbol %s is not resolved.\n", __func__, sym);
+        rc = add_sym_to_tree(undefined_sym, sym);
+        if (rc != EXIT_SUCCESS && rc != EEXIST) {
+          fprintf(stderr,
+                  "><SB> %s(): failed to add undefined symbol %s to "
+                  "the tree with error: %s\n",
+                  __func__, sym, strerror(rc));
+        } else {
+          // printf("><SB> %s(): Symbol: %s is still undefined\n", __func__,
+          //        sym);
+          rc = EXIT_SUCCESS;
+        }
       }
-      // For now just release it
-      free(sym);
-      sym = NULL;
     } else if (is_buffer_producer_done(ctx->buffer)) {
       printf("><SB> %s() received producer is done signal, exiting...\n",
              __func__);
@@ -464,7 +492,27 @@ void *resolve_undefined_sym(void *arg) {
               __func__, producer_thread_arr[i].tid, strerror(thread_rc));
     }
   }
+  if (rc == EXIT_SUCCESS) {
+    printf("><SB> List of dependencies:\n");
+    struct avl2_node_type_ *node = NULL;
+    node = avl2_get_first(dependency);
+    while (node) {
+      printf("\t- %s\n", ((sym_node_t *)node)->sym_name);
+      node = avl2_get_next(dependency, node);
+    }
+    printf("><SB> List of unresolved undefined symbols:\n");
+    node = avl2_get_first(undefined_sym);
+    while (node) {
+      printf("\t- %s\n", ((sym_node_t *)node)->sym_name);
+      node = avl2_get_next(undefined_sym, node);
+    }
+  }
 cleanup:
+  if (undefined_sym) {
+    avl2_destroy(undefined_sym, destroy_sym_node);
+    free(undefined_sym);
+    undefined_sym = NULL;
+  }
   if (dependency) {
     avl2_destroy(dependency, NULL);
     free(dependency);

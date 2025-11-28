@@ -289,23 +289,6 @@ int get_elf_sec_name_indx(elf_file_descr_t *elf_file_descr, int indx) {
   return -1;
 }
 
-// static int get_elf_sym_tbl_entry_name_indx(elf_file_descr_t *elf_file_descr,
-//                                            int indx) {
-//   if (elf_file_descr) {
-//     if (elf_file_descr->elf_sym_tbls) {
-//       if (indx < elf_file_descr->elf_sym_tbl_num_entry) {
-//         return (
-//             elf_file_descr->is_64bit
-//                 ? elf_file_descr->elf_sym_tab[indx].elf_64_sym_entry.st_name
-//                 :
-//                 elf_file_descr->elf_sym_tab[indx].elf_32_sym_entry.st_name);
-//       }
-//     }
-//   }
-
-//   return -1;
-// }
-
 static int get_elf_sym_tab_entry_size(elf_file_descr_t *elf_file_descr) {
   if (elf_file_descr->is_64bit) {
     return sizeof(Elf64_Sym);
@@ -425,36 +408,6 @@ static int get_elf_pg_data(int fd, elf_file_descr_t *elf_file_descr, int size,
   return rc;
 }
 
-// static int get_elf_sym_tab(elf_file_descr_t *elf_file_descr, int indx) {
-//   int rc = EXIT_SUCCESS;
-//   elf_sym_tbl_entry_u_t *tab = NULL;
-
-//   int tbl_size = get_elf_sec_size(elf_file_descr, indx);
-//   if (tbl_size) {
-//     if (rc == EXIT_SUCCESS) {
-//       tab = malloc(tbl_size);
-//       if (!tab) {
-//         rc = ENOMEM;
-//       }
-//       if (rc == EXIT_SUCCESS) {
-//         rc = get_elf_sec_data(elf_file_descr, indx, (void *)tab);
-//       }
-//       if (rc != EXIT_SUCCESS) {
-//         if (tab) {
-//           free(tab);
-//           tab = NULL;
-//         }
-//       } else {
-//         elf_file_descr->elf_sym_tab = tab;
-//         elf_file_descr->elf_sym_tbl_size = tbl_size;
-//         elf_file_descr->elf_sym_tbl_num_entry =
-//             tbl_size / get_elf_sym_tab_entry_size(elf_file_descr);
-//       }
-//     }
-//   }
-//   return rc;
-// }
-
 static int get_elf_str_from_table(char *table, int table_size, int indx,
                                   char **name) {
   int rc = EXIT_SUCCESS;
@@ -471,7 +424,6 @@ static int get_elf_str_from_table(char *table, int table_size, int indx,
     if (*name == NULL) {
       rc = ENOMEM;
     }
-    // printf("><SB> MEM: allocated name at %p\n", *name);
   }
   if (rc == EXIT_SUCCESS) {
     memcpy(*name, (char *)(table + indx), i);
@@ -621,96 +573,6 @@ int elf_sym_get_string(elf_file_descr_t *file_p, bool is_dynamic, int st_name,
   }
   return rc;
 }
-
-// int get_elf_sym_symtab(elf_file_descr_t *elf_file_descr, char *symbol,
-//                        void **symbol_data) {
-//   int rc = EXIT_SUCCESS;
-//   int strtab_indx = -1;
-
-//   if ((get_elf_strtab_indx(elf_file_descr, &strtab_indx)) == -1) {
-//     rc = ENOENT;
-//   }
-//   for (int i = 0;
-//        i < elf_file_descr->elf_sym_tbl_num_entry && rc == EXIT_SUCCESS; i++)
-//        {
-//     char *name = NULL;
-//     int indx = -1;
-//     if ((indx = get_elf_sym_tbl_entry_name_indx(elf_file_descr, i)) == -1) {
-//       rc = ENOENT;
-//       continue;
-//     }
-//     if ((get_elf_str_from_table(
-//             elf_file_descr->elf_str_tbls[strtab_indx].elf_str_table,
-//             elf_file_descr->elf_sym_tbl_size, indx, &name)) == -1) {
-//       rc = ENOENT;
-//       continue;
-//     }
-//     if (strcmp(name, symbol) == 0) {
-//       *symbol_data = (void *)&elf_file_descr->elf_sym_tab[i];
-//       if (name) {
-//         free(name);
-//         name = NULL;
-//       }
-//       break;
-//     }
-//     if (name) {
-//       free(name);
-//       name = NULL;
-//     }
-//   }
-
-//   return rc;
-// }
-
-// int get_elf_all_sym_symtab(elf_file_descr_t *elf_file_descr, char ***symbols,
-//                            int *sym_count) {
-//   int rc = EXIT_SUCCESS;
-//   int strtab_indx = -1;
-//   char **list = NULL;
-//   char **temp = NULL;
-//   int list_size = 0;
-
-//   if ((get_elf_strtab_indx(elf_file_descr, &strtab_indx)) == -1) {
-//     rc = ENOENT;
-//   }
-//   for (int i = 0;
-//        i < elf_file_descr->elf_sym_tbl_num_entry && rc == EXIT_SUCCESS; i++)
-//        {
-//     char *name = NULL;
-//     int indx = -1;
-//     if ((indx = get_elf_sym_tbl_entry_name_indx(elf_file_descr, i)) == -1) {
-//       rc = ENOENT;
-//       continue;
-//     }
-//     if ((get_elf_str_from_table(
-//             elf_file_descr->elf_str_tbls[strtab_indx].elf_str_table,
-//             elf_file_descr->elf_sym_tbl_size, indx, &name)) == -1) {
-//       rc = ENOENT;
-//       continue;
-//     }
-//     temp = realloc(list, sizeof(char *) * (list_size + 1));
-//     if (!temp) {
-//       rc = ENOMEM;
-//       continue;
-//     }
-//     list = temp;
-//     list[list_size] = name;
-//     list_size++;
-//   }
-
-//   if (rc != EXIT_SUCCESS) {
-//     for (int i = 0; i < list_size; i++) {
-//       free(list[i]);
-//       list[i] = NULL;
-//     }
-//     free(list);
-//   } else {
-//     *sym_count = list_size;
-//     *symbols = list;
-//   }
-
-//   return rc;
-// }
 
 int get_els_exec_link_time_base_addr(elf_file_descr_t *elf_file_descr,
                                      Elf64_Addr *eltba) {
@@ -988,8 +850,6 @@ int print_sym_table(elf_file_descr_t *file_p) {
     void *entry = NULL;
     entry = iterator_next(iter);
     while (entry) {
-      // for (int i = 0; i < file_p->elf_sym_tbls[y].elf_sym_tbl_num_entry; i++)
-      // {
       if (ELF_ST_TYPE(elf_sym_get_st_info(file_p, entry)) == STT_OBJECT) {
         int st_name = elf_sym_get_st_name(file_p, entry);
         rc = elf_sym_get_string(file_p, file_p->elf_sym_tbls[y].is_dynamic,
@@ -1072,11 +932,13 @@ int process_elf_file(char *fn, elf_file_descr_t **elf_file_descr) {
     if (file_p->elf_hdr->elf_64_hdr.e_ident[EI_CLASS] == ELFCLASS64) {
       file_p->is_64bit = true;
     }
-    // Processing program headers if offset is not 0
+// Processing program headers if offset is not 0
+#ifdef DEBUG
     printf("><SB> %s(): Start of a program header table: 0x%02x\n", __func__,
            get_elf_hdr_phoff(file_p));
     printf("><SB> %s(): Size of a program header table entry: 0x%02x\n",
            __func__, get_elf_hdr_phentsize(file_p));
+#endif
     if (get_elf_hdr_phoff(file_p) > 0) {
       file_p->elf_pg_hdr =
           calloc(get_elf_hdr_phnum(file_p), get_elf_hdr_phentsize(file_p));

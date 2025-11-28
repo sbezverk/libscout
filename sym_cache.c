@@ -148,9 +148,9 @@ int get_sym(char *fn, sym_cache_t *cache) {
   char *name = NULL;
   rc = process_elf_file(fn, &elf_file_descr);
   if (rc == EXIT_SUCCESS) {
-    // #ifdef DEBUG
+#ifdef DEBUG
     printf("><SB> %s: Caching symbols found in library: %s\n", __func__, fn);
-    // #endif
+#endif
     for (int i = 0; i < elf_file_descr->elf_sym_tbl_num && rc == EXIT_SUCCESS;
          i++) {
       if (!elf_file_descr->elf_sym_tbls[i].is_dynamic) {
@@ -180,7 +180,6 @@ int get_sym(char *fn, sym_cache_t *cache) {
               name = NULL;
             }
           } else {
-            // printf("\t\t-\t %s\n", name);
             if (!elf_sym_is_local(elf_file_descr, entry) &&
                 elf_sym_is_defined(elf_file_descr, entry)) {
               // Interested only in Global and Defined symbols
@@ -218,7 +217,9 @@ int populate_cache(sym_cache_t *cache, char *file_name) {
     }
     return EINVAL;
   }
+#ifdef DEBUG
   printf("><SB> %s(): caching symbols for %s\n", __func__, file_name);
+#endif
   rc = get_sym(file_name, cache);
 
   return rc;
