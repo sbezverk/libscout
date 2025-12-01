@@ -21,6 +21,9 @@ cc_binary(
     defines = [
         "_POSIX_C_SOURCE=200809",
     ],
+    linkopts = [
+        "-pthread",
+    ],
     deps = [
         "//avl",
     ],
