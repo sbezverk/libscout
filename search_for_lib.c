@@ -51,7 +51,9 @@ int search_for_lib(char *lib_path, sym_cache_t *cache, regex_t *lib_regex) {
         }
         snprintf((char *)new_lib_path, PATH_MAX, "%s/%s", lib_path,
                  dir_entry->d_name);
+#ifdef DEBUG_LIB
         printf("><SB> %s(): Found library file: %s\n", __func__, new_lib_path);
+#endif
         // Populating cache with best effort, as some files even though
         // have .so extension are not valid ELF library.
         populate_cache(cache, new_lib_path);

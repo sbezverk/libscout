@@ -104,7 +104,7 @@ void *get_undefined_sym(void *arg) {
   char *name = NULL;
   producer_thread_ctx_t *ctx = (producer_thread_ctx_t *)arg;
   thread_user_data_t *data = (thread_user_data_t *)ctx->user_data;
-#ifdef DEBUG
+#ifdef DEBUG_UND
   printf("><SB> %s() producer thread for file: %s ctx at: %p started\n",
          __func__, data->file_name, (void *)ctx);
 #endif
@@ -162,7 +162,7 @@ void *get_undefined_sym(void *arg) {
       elf_file_descr = NULL;
     }
   }
-#ifdef DEBUG
+#ifdef DEBUG_UND
   printf("><SB> %s() producer thread for file: %s ctx at: %p finished\n",
          __func__, data->file_name, (void *)ctx);
 #endif

@@ -482,7 +482,7 @@ static int elf_populate_str_table(int fd, elf_file_descr_t *file_p,
       rc = EINVAL;
     } else {
       file_p->elf_str_tbls[tbl_indx].elf_str_tbl_name = name;
-#ifdef DEBUG
+#ifdef DEBUG_ELF
       printf("><SB> string table index: %d name:%s\n",
              file_p->elf_str_tbls[tbl_indx].sec_indx,
              file_p->elf_str_tbls[tbl_indx].elf_str_tbl_name);
@@ -502,7 +502,7 @@ static int elf_populate_sym_table(int fd, elf_file_descr_t *file_p,
   if (!file_p->elf_sym_tbls[tbl_indx].elf_sym_table) {
     rc = ENOMEM;
   }
-#ifdef DEBUG
+#ifdef DEBUG_ELF
   printf("><SB> >>>>>>> Table: %d Section: %d size: %d allocated at: %p\n",
          tbl_indx, sec_indx, sec_size,
          (void *)file_p->elf_sym_tbls[tbl_indx].elf_sym_table);
@@ -531,7 +531,7 @@ static int elf_populate_sym_table(int fd, elf_file_descr_t *file_p,
       } else {
         file_p->elf_sym_tbls[tbl_indx].is_dynamic = false;
       }
-#ifdef DEBUG
+#ifdef DEBUG_ELF
       printf("><SB> sym table index: %d name: %s\n",
              file_p->elf_sym_tbls[tbl_indx].sec_indx,
              file_p->elf_sym_tbls[tbl_indx].elf_sym_tbl_name);
@@ -718,7 +718,7 @@ static int process_elf_pg_hdr_pt_note(int fd, elf_file_descr_t *file_p,
       switch (type) {
       case NT_AUXV:
         Elf64_Addr at_base = 0;
-#ifdef DEBUG
+#ifdef DEBUG_ELF
         printf("Found NT_AUXV\n");
 #endif
         if ((process_nt_auxv(file_p->is_64bit, descr, descr_sz, &at_base)) ==
@@ -730,7 +730,7 @@ static int process_elf_pg_hdr_pt_note(int fd, elf_file_descr_t *file_p,
         }
         break;
       case NT_FILE:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
         printf("NT_FILE\n");
 #endif
         process_nt_file(file_p->is_64bit, descr, descr_sz);
@@ -933,7 +933,7 @@ int process_elf_file(char *fn, elf_file_descr_t **elf_file_descr) {
       file_p->is_64bit = true;
     }
 // Processing program headers if offset is not 0
-#ifdef DEBUG
+#ifdef DEBUG_ELF
     printf("><SB> %s(): Start of a program header table: 0x%02x\n", __func__,
            get_elf_hdr_phoff(file_p));
     printf("><SB> %s(): Size of a program header table entry: 0x%02x\n",
@@ -979,43 +979,43 @@ int process_elf_file(char *fn, elf_file_descr_t **elf_file_descr) {
           }
           switch (type) {
           case PT_NOTE:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("Found PT_NOTE, processing...\n");
 #endif
             rc = process_elf_pg_hdr_pt_note(fd, file_p, entry);
             break;
           case PT_LOAD:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("Found PT_LOAD, processing...\n");
 #endif
             break;
           case PT_DYNAMIC:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("Found PT_DYNAMIC, processing...\n");
 #endif
             break;
           case PT_INTERP:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("Found PT_INTERP, processing...\n");
 #endif
             break;
           case PT_SHLIB:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("Found PT_SHLIB, processing...\n");
 #endif
             break;
           case PT_PHDR:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("Found PT_PHDR, processing...\n");
 #endif
             break;
           case PT_TLS:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("Found PT_TLS, processing...\n");
 #endif
             break;
           case PT_GNU_EH_FRAME:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("Found PT_GNU_EH_FRAME, processing...\n");
 #endif
             break;
@@ -1071,19 +1071,19 @@ int process_elf_file(char *fn, elf_file_descr_t **elf_file_descr) {
              i++) {
           switch (get_elf_sec_hdr_type(file_p, i)) {
           case SHT_SYMTAB:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("SHT_SYMTAB\n");
 #endif
             rc = populate_sym_table(fd, file_p, i);
             break;
           case SHT_DYNSYM:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("SHT_DYNSYM\n");
 #endif
             rc = populate_sym_table(fd, file_p, i);
             break;
           case SHT_STRTAB:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("SHT_STRTAB\n");
 #endif
             if (i == get_elf_sec_hdr_strndx(file_p)) {
@@ -1093,32 +1093,32 @@ int process_elf_file(char *fn, elf_file_descr_t **elf_file_descr) {
             rc = populate_string_table(fd, file_p, i);
             break;
           case SHT_RELA:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("SHT_RELA\n");
 #endif
             break;
           case SHT_DYNAMIC:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("SHT_DYNAMIC\n");
 #endif
             break;
           case SHT_NOTE:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("SHT_NOTE\n");
 #endif
             break;
           case SHT_REL:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("SHT_REL\n");
 #endif
             break;
           case SHT_SHLIB:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("SHT_SHLIB\n");
 #endif
             break;
           case SHT_SYMTAB_SHNDX:
-#ifdef DEBUG
+#ifdef DEBUG_ELF
             printf("SHT_SYMTAB_SHNDX\n");
 #endif
             break;
@@ -1135,7 +1135,7 @@ int process_elf_file(char *fn, elf_file_descr_t **elf_file_descr) {
     free_elf_file_descr(file_p);
   } else {
     *elf_file_descr = file_p;
-#ifdef DEBUG
+#ifdef DEBUG_ELF
     print_str_table(file_p);
     print_sym_table(file_p);
 #endif

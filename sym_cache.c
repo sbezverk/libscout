@@ -12,10 +12,6 @@
 
 void destroy_sym_node(avl2_node_type *node, avl_tree_type *lib_node) {
   if (((sym_node_t *)node)->sym_name) {
-#ifdef DEBUG
-    printf("><SB> %s(): removing sym %s\n", __func__,
-           ((sym_node_t *)node)->sym_name);
-#endif
     free(((sym_node_t *)node)->sym_name);
     ((sym_node_t *)node)->sym_name = NULL;
   }
@@ -25,19 +21,11 @@ void destroy_sym_node(avl2_node_type *node, avl_tree_type *lib_node) {
 
 void destroy_cache_node(avl2_node_type *node, avl_tree_type *lib_node) {
   if (((lib_node_t *)node)->defined) {
-#ifdef DEBUG
-    printf("><SB> %s(): removing cached library %s defined symbols\n", __func__,
-           ((lib_node_t *)node)->lib_name);
-#endif
     avl2_destroy(((lib_node_t *)node)->defined, destroy_sym_node);
     free(((lib_node_t *)node)->defined);
     ((lib_node_t *)node)->defined = NULL;
   }
   if (((lib_node_t *)node)->undefined) {
-#ifdef DEBUG
-    printf("><SB> %s(): removing cached library %s undefined symbols\n",
-           __func__, ((lib_node_t *)node)->lib_name);
-#endif
     avl2_destroy(((lib_node_t *)node)->undefined, destroy_sym_node);
     free(((lib_node_t *)node)->undefined);
     ((lib_node_t *)node)->undefined = NULL;
@@ -113,7 +101,7 @@ static int store_sym_in_tree(avl_tree_type *tree, char *lib_name, char *name) {
         } else {
           // New lib has been inserted, storing sym
           rc = store_sym(lib, name);
-#ifdef DEBUG
+#ifdef DEBUG_CACHE
           printf(
               "><SB> %s() symbol \"%s\" stored in a new lib name: %s treewith "
               "rc: %s\n ",
@@ -124,7 +112,7 @@ static int store_sym_in_tree(avl_tree_type *tree, char *lib_name, char *name) {
     } else {
       // Lib is already in the tree, then just storing sym
       rc = store_sym(debug_node, name);
-#ifdef DEBUG
+#ifdef DEBUG_CACHE
       printf("><SB> %s() symbol \"%s\" stored in an existing lib name: %s tree "
              " with rc: %s\n ",
              __func__, name, lib_name, strerror(rc));
@@ -148,7 +136,7 @@ int get_sym(char *fn, sym_cache_t *cache) {
   char *name = NULL;
   rc = process_elf_file(fn, &elf_file_descr);
   if (rc == EXIT_SUCCESS) {
-#ifdef DEBUG
+#ifdef DEBUG_CACHE
     printf("><SB> %s: Caching symbols found in library: %s\n", __func__, fn);
 #endif
     for (int i = 0; i < elf_file_descr->elf_sym_tbl_num && rc == EXIT_SUCCESS;
@@ -217,7 +205,7 @@ int populate_cache(sym_cache_t *cache, char *file_name) {
     }
     return EINVAL;
   }
-#ifdef DEBUG
+#ifdef DEBUG_CACHE
   printf("><SB> %s(): caching symbols for %s\n", __func__, file_name);
 #endif
   rc = get_sym(file_name, cache);
@@ -233,7 +221,7 @@ char *check_sym_cache(sym_cache_t *cache, char *sym) {
   }
   lib_node = (lib_node_t *)avl2_get_first(cache->cache);
   while (lib_node) {
-#ifdef DEBUG
+#ifdef DEBUG_CACHE
     printf("><SB> %s() found lib %s in the tree.\n", __func__,
            lib_node->lib_name);
 #endif
