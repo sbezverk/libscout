@@ -2,6 +2,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <regex.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
@@ -11,11 +12,10 @@
 #include "elflib.h"
 #include "libscout.h"
 
-int search_for_lib(char *lib_path, sym_cache_t *cache) {
+int search_for_lib(char *lib_path, sym_cache_t *cache, regex_t *lib_regex) {
   DIR *dir_stream = NULL;
   struct dirent *dir_entry = NULL;
   int rc = EXIT_SUCCESS;
-  char lib_suffix[] = {".so"};
 
   if ((dir_stream = opendir(lib_path)) == NULL) {
     rc = errno;
@@ -33,23 +33,25 @@ int search_for_lib(char *lib_path, sym_cache_t *cache) {
         } else {
           snprintf((char *)new_lib_path, PATH_MAX, "%s/%s", lib_path,
                    dir_entry->d_name);
-          rc = search_for_lib(new_lib_path, cache);
+          rc = search_for_lib(new_lib_path, cache, lib_regex);
           if (rc != EXIT_SUCCESS) {
             goto cleanup;
           }
         }
       } else {
-        if (strlen(dir_entry->d_name) < 4) {
-          // library name cannot be shorter than 4 bytes "a.so"
+        rc = regexec(lib_regex, dir_entry->d_name, 0, NULL, 0);
+        if (rc == REG_NOMATCH) {
+          rc = EXIT_SUCCESS;
           continue;
-        }
-        if (strcmp(dir_entry->d_name + strlen(dir_entry->d_name) -
-                       strlen(lib_suffix),
-                   lib_suffix) != 0) {
-          continue;
+        } else if (rc != 0) {
+          char err_buf[256];
+          regerror(rc, lib_regex, err_buf, sizeof(err_buf));
+          printf("><SB> %s(): regexec() failed: %s\n", __func__, err_buf);
+          goto cleanup;
         }
         snprintf((char *)new_lib_path, PATH_MAX, "%s/%s", lib_path,
                  dir_entry->d_name);
+        printf("><SB> %s(): Found library file: %s\n", __func__, new_lib_path);
         // Populating cache with best effort, as some files even though
         // have .so extension are not valid ELF library.
         populate_cache(cache, new_lib_path);

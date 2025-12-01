@@ -3,6 +3,7 @@
 #include <getopt.h>
 #include <limits.h>
 #include <memory.h>
+#include <regex.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,8 @@
 #include "elflib.h"
 #include "libscout.h"
 
+#define REGEX_PATTERN "^lib[a-zA-Z0-9_-]+\\.so(\\.[0-9]+)*$"
+
 int main_thread(char *fn, char *lib_path) {
   int rc = EXIT_SUCCESS;
   sym_cache_t *cache = NULL;
@@ -20,6 +23,7 @@ int main_thread(char *fn, char *lib_path) {
   producer_thread_ctx_t *sym_producer_ctx = NULL;
   pthread_t consumer_thread_id;
   void *consumer_thread_rc;
+  regex_t lib_regex;
 
   // Initialization of the sym cache
   cache = malloc(sizeof(sym_cache_t));
@@ -28,8 +32,18 @@ int main_thread(char *fn, char *lib_path) {
   }
   rc = init_tree(&cache->cache, lib_name_compare, AVL_OPTION_DEFAULT);
   if (rc == EXIT_SUCCESS) {
+    // Compiling regex for library file names
+    rc = regcomp(&lib_regex, REGEX_PATTERN, REG_EXTENDED | REG_NOSUB);
+    if (rc != 0) {
+      char err_buf[256];
+      regerror(rc, &lib_regex, err_buf, sizeof(err_buf));
+      printf("><SB> %s(): regcomp() failed: %s\n", __func__, err_buf);
+    }
+  }
+  if (rc == EXIT_SUCCESS) {
     // Starting searching for libs and populating sym cache
-    rc = search_for_lib(lib_path, cache);
+    rc = search_for_lib(lib_path, cache, &lib_regex);
+    regfree(&lib_regex);
   }
   if (rc == EXIT_SUCCESS) {
     // Libraries' sym cache is ready, can start Undefined Symbols resolving

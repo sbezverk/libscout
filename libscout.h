@@ -2,6 +2,7 @@
 
 #include <limits.h>
 #include <pthread.h>
+#include <regex.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 
@@ -79,7 +80,7 @@ int create_producer_thread_ctx(producer_thread_ctx_t **ctx);
 
 void destroy_producer_thread_ctx(producer_thread_ctx_t *ctx);
 
-int search_for_lib(char *lib_path, sym_cache_t *cache);
+int search_for_lib(char *lib_path, sym_cache_t *cache, regex_t *lib_regex);
 
 bool buffer_is_empty(mpsc_buffer_t *b);
 
